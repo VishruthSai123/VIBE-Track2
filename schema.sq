@@ -1,0 +1,254 @@
+-- ==============================================================================
+-- 1. SETUP & UTILITIES
+-- ==============================================================================
+
+-- Enable UUID extension
+create extension if not exists "uuid-ossp";
+
+-- ==============================================================================
+-- 2. TABLES (Safe to run if tables exist)
+-- ==============================================================================
+
+-- PROFILES
+create table if not exists public.profiles (
+  id uuid references auth.users not null primary key,
+  name text,
+  email text,
+  avatar text,
+  role text default 'Developer',
+  "workspaceIds" text[] default array[]::text[], 
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- WORKSPACES
+create table if not exists public.workspaces (
+  id text primary key,
+  name text not null,
+  "ownerId" uuid references public.profiles(id),
+  members uuid[] default array[]::uuid[],
+  description text,
+  logo text,
+  "colorTheme" text,
+  visibility text check (visibility in ('private', 'public')) default 'private',
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- PROJECTS
+create table if not exists public.projects (
+  id text primary key,
+  "workspaceId" text references public.workspaces(id) on delete cascade,
+  name text not null,
+  key text not null,
+  description text,
+  type text check (type in ('software', 'marketing', 'business')),
+  "leadId" uuid references public.profiles(id),
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- SPACES (NEW)
+create table if not exists public.spaces (
+  id text primary key,
+  "projectId" text references public.projects(id) on delete cascade,
+  name text not null,
+  type text check (type in ('development', 'design', 'qa', 'marketing', 'general')) default 'general',
+  description text,
+  "createdBy" uuid references public.profiles(id),
+  "createdAt" timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- TEAMS
+create table if not exists public.teams (
+  id text primary key,
+  "workspaceId" text references public.workspaces(id) on delete cascade,
+  name text not null,
+  "leadId" uuid references public.profiles(id),
+  members uuid[] default array[]::uuid[],
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- SPRINTS
+create table if not exists public.sprints (
+  id text primary key,
+  "projectId" text references public.projects(id) on delete cascade,
+  name text not null,
+  "startDate" timestamp with time zone,
+  "endDate" timestamp with time zone,
+  status text check (status in ('ACTIVE', 'PLANNED', 'COMPLETED')) default 'PLANNED',
+  goal text,
+  capacity integer default 30,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- EPICS
+create table if not exists public.epics (
+  id text primary key,
+  "projectId" text references public.projects(id) on delete cascade,
+  title text not null,
+  description text,
+  "startDate" timestamp with time zone,
+  "endDate" timestamp with time zone,
+  color text,
+  status text check (status in ('PROGRESS', 'DONE', 'TODO')) default 'TODO',
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- ISSUES
+create table if not exists public.issues (
+  id text primary key,
+  "projectId" text references public.projects(id) on delete cascade,
+  "spaceId" text references public.spaces(id) on delete set null, -- Link to Space
+  title text not null,
+  description text,
+  status text not null,
+  priority text not null,
+  type text not null,
+  "assigneeId" uuid references public.profiles(id),
+  "reporterId" uuid references public.profiles(id),
+  "sprintId" text references public.sprints(id) on delete set null,
+  "epicId" text references public.epics(id) on delete set null,
+  "storyPoints" integer,
+  summary text,
+  comments jsonb default '[]'::jsonb,
+  subtasks jsonb default '[]'::jsonb,
+  attachments jsonb default '[]'::jsonb,
+  -- Use camelCase column names to match frontend Interface directly
+  "createdAt" timestamp with time zone default timezone('utc'::text, now()) not null,
+  "updatedAt" timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- NOTIFICATIONS
+create table if not exists public.notifications (
+  id text primary key,
+  "userId" uuid references public.profiles(id) not null,
+  title text not null,
+  message text not null,
+  read boolean default false,
+  type text check (type in ('ASSIGNMENT', 'COMMENT', 'SYSTEM')),
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- ==============================================================================
+-- 3. ROW LEVEL SECURITY (RLS) POLICIES
+-- ==============================================================================
+
+-- Enable RLS
+alter table profiles enable row level security;
+alter table workspaces enable row level security;
+alter table projects enable row level security;
+alter table spaces enable row level security;
+alter table teams enable row level security;
+alter table sprints enable row level security;
+alter table epics enable row level security;
+alter table issues enable row level security;
+alter table notifications enable row level security;
+
+-- Drop existing policies to prevent duplication errors
+drop policy if exists "Public profiles are viewable by everyone" on profiles;
+drop policy if exists "Users can update own profile" on profiles;
+drop policy if exists "Users can insert own profile" on profiles;
+drop policy if exists "Members can view workspaces" on workspaces;
+drop policy if exists "Members can update workspaces" on workspaces;
+drop policy if exists "Users can create workspaces" on workspaces;
+drop policy if exists "Workspace members can view projects" on projects;
+drop policy if exists "Workspace members can create projects" on projects;
+drop policy if exists "Workspace members can update projects" on projects;
+drop policy if exists "Project members can view spaces" on spaces;
+drop policy if exists "Project members can create spaces" on spaces;
+drop policy if exists "Project members can update spaces" on spaces;
+drop policy if exists "Project members can delete spaces" on spaces;
+drop policy if exists "Project members can view issues" on issues;
+drop policy if exists "Authenticated users can create issues" on issues;
+drop policy if exists "Authenticated users can update issues" on issues;
+drop policy if exists "Authenticated users can delete issues" on issues;
+drop policy if exists "Authenticated users can view sprints" on sprints;
+drop policy if exists "Authenticated users can manage sprints" on sprints;
+drop policy if exists "Authenticated users can view epics" on epics;
+drop policy if exists "Authenticated users can manage epics" on epics;
+drop policy if exists "Authenticated users can view teams" on teams;
+drop policy if exists "Authenticated users can manage teams" on teams;
+drop policy if exists "Users can view own notifications" on notifications;
+
+-- --- RECREATE POLICIES ---
+
+-- PROFILES
+create policy "Public profiles are viewable by everyone" on profiles for select using (true);
+create policy "Users can update own profile" on profiles for update using (auth.uid() = id);
+create policy "Users can insert own profile" on profiles for insert with check (auth.uid() = id);
+
+-- WORKSPACES
+create policy "Members can view workspaces" on workspaces for select using (auth.uid() = any(members));
+create policy "Members can update workspaces" on workspaces for update using (auth.uid() = any(members));
+create policy "Users can create workspaces" on workspaces for insert with check (auth.uid() = "ownerId");
+
+-- PROJECTS
+create policy "Workspace members can view projects" on projects for select using (
+  exists (select 1 from workspaces w where w.id = projects."workspaceId" and auth.uid() = any(w.members))
+);
+create policy "Workspace members can create projects" on projects for insert with check (true); 
+create policy "Workspace members can update projects" on projects for update using (true);
+
+-- SPACES (NEW)
+create policy "Project members can view spaces" on spaces for select using (
+  exists (select 1 from projects p join workspaces w on w.id = p."workspaceId" where p.id = spaces."projectId" and auth.uid() = any(w.members))
+);
+create policy "Project members can create spaces" on spaces for insert with check (true);
+create policy "Project members can update spaces" on spaces for update using (true);
+create policy "Project members can delete spaces" on spaces for delete using (true);
+
+-- ISSUES
+create policy "Project members can view issues" on issues for select using (
+  exists (select 1 from projects p join workspaces w on w.id = p."workspaceId" where p.id = issues."projectId" and auth.uid() = any(w.members))
+);
+create policy "Authenticated users can create issues" on issues for insert with check (auth.role() = 'authenticated');
+create policy "Authenticated users can update issues" on issues for update using (auth.role() = 'authenticated');
+create policy "Authenticated users can delete issues" on issues for delete using (auth.role() = 'authenticated');
+
+-- SPRINTS & EPICS & TEAMS
+create policy "Authenticated users can view sprints" on sprints for select using (true);
+create policy "Authenticated users can manage sprints" on sprints for all using (auth.role() = 'authenticated');
+create policy "Authenticated users can view epics" on epics for select using (true);
+create policy "Authenticated users can manage epics" on epics for all using (auth.role() = 'authenticated');
+create policy "Authenticated users can view teams" on teams for select using (true);
+create policy "Authenticated users can manage teams" on teams for all using (auth.role() = 'authenticated');
+
+-- NOTIFICATIONS
+create policy "Users can view own notifications" on notifications for select using (auth.uid() = "userId");
+
+-- ==============================================================================
+-- 4. AUTOMATION (Triggers)
+-- ==============================================================================
+
+create or replace function public.handle_new_user()
+returns trigger as $$
+begin
+  insert into public.profiles (id, email, name, avatar, role)
+  values (
+    new.id,
+    new.email,
+    coalesce(new.raw_user_meta_data->>'full_name', 'New User'),
+    'https://ui-avatars.com/api/?name=' || coalesce(new.raw_user_meta_data->>'full_name', 'New+User') || '&background=random',
+    'Developer'
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$ language plpgsql security definer;
+
+-- Recreate trigger
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+-- ==============================================================================
+-- 5. STORAGE BUCKETS (Optional)
+-- ==============================================================================
+
+insert into storage.buckets (id, name, public) values ('attachments', 'attachments', true)
+on conflict (id) do nothing;
+
+drop policy if exists "Public Access" on storage.objects;
+drop policy if exists "Authenticated Insert" on storage.objects;
+
+create policy "Public Access" on storage.objects for select using ( bucket_id = 'attachments' );
+create policy "Authenticated Insert" on storage.objects for insert with check ( bucket_id = 'attachments' and auth.role() = 'authenticated' );
