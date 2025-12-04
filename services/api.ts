@@ -1,4 +1,4 @@
-import { Space, SpacePermission, User, Workspace, Project, Issue, Sprint, Epic, Team, Notification, Activity } from '../types';
+import { Space, SpacePermission, SpaceMember, User, Workspace, Project, Issue, Sprint, Epic, Team, Notification, Activity, ActivityAction, SpaceType } from '../types';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 const handleSupabaseError = (error: any) => {
@@ -87,11 +87,15 @@ export const api = {
     }
   },
 
-  // --- SPACES ---
-  getSpaces: async (projectId: string): Promise<Space[]> => {
+  // --- SPACES (Enhanced) ---
+  getSpaces: async (projectId: string, includeDeleted = false): Promise<Space[]> => {
     if (isSupabaseConfigured) {
         try {
-            const { data, error } = await supabase.from('spaces').select('*').eq('projectId', projectId);
+            let query = supabase.from('spaces').select('*').eq('projectId', projectId);
+            if (!includeDeleted) {
+                query = query.is('deletedAt', null);
+            }
+            const { data, error } = await query.order('createdAt', { ascending: true });
             if (error && error.code !== '42P01') console.error(error); 
             return (data as Space[]) || [];
         } catch (e) {
@@ -99,6 +103,19 @@ export const api = {
         }
     }
     return [];
+  },
+
+  getSpaceById: async (spaceId: string): Promise<Space | null> => {
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase.from('spaces').select('*').eq('id', spaceId).single();
+        if (error) return null;
+        return data as Space;
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
   },
 
   createSpace: async (space: Space): Promise<Space> => {
@@ -110,9 +127,70 @@ export const api = {
       throw new Error("Supabase not configured");
   },
 
+  updateSpace: async (space: Partial<Space> & { id: string }): Promise<void> => {
+      if (isSupabaseConfigured) {
+          const { error } = await supabase.from('spaces').update({
+              ...space,
+              updatedAt: new Date().toISOString()
+          }).eq('id', space.id);
+          if (error) throw new Error(error.message);
+      }
+  },
+
+  softDeleteSpace: async (spaceId: string): Promise<void> => {
+      if (isSupabaseConfigured) {
+          const { error } = await supabase.from('spaces').update({
+              deletedAt: new Date().toISOString()
+          }).eq('id', spaceId);
+          if (error) throw new Error(error.message);
+      }
+  },
+
+  restoreSpace: async (spaceId: string): Promise<void> => {
+      if (isSupabaseConfigured) {
+          const { error } = await supabase.from('spaces').update({
+              deletedAt: null
+          }).eq('id', spaceId);
+          if (error) throw new Error(error.message);
+      }
+  },
+
   deleteSpace: async (spaceId: string): Promise<void> => {
       if (isSupabaseConfigured) {
           const { error } = await supabase.from('spaces').delete().eq('id', spaceId);
+          if (error) throw new Error(error.message);
+      }
+  },
+
+  // --- SPACE MEMBERS ---
+  getSpaceMembers: async (spaceId: string): Promise<SpaceMember[]> => {
+      if (isSupabaseConfigured) {
+          try {
+            const { data, error } = await supabase
+                .from('space_members')
+                .select('*')
+                .eq('spaceId', spaceId);
+            if (error && error.code !== '42P01') console.error(error);
+            return (data as SpaceMember[]) || [];
+          } catch (e) { return []; }
+      }
+      return [];
+  },
+
+  addSpaceMember: async (member: SpaceMember): Promise<void> => {
+      if (isSupabaseConfigured) {
+          const { error } = await supabase.from('space_members').insert(member);
+          if (error) throw new Error(error.message);
+      }
+  },
+
+  removeSpaceMember: async (spaceId: string, userId: string): Promise<void> => {
+      if (isSupabaseConfigured) {
+          const { error } = await supabase
+              .from('space_members')
+              .delete()
+              .eq('spaceId', spaceId)
+              .eq('userId', userId);
           if (error) throw new Error(error.message);
       }
   },
@@ -133,18 +211,49 @@ export const api = {
       return [];
   },
 
+  getSpacePermissionForUser: async (spaceId: string, userId: string): Promise<SpacePermission | null> => {
+      if (isSupabaseConfigured) {
+          try {
+            const { data, error } = await supabase
+                .from('space_permissions')
+                .select('*')
+                .eq('spaceId', spaceId)
+                .eq('userId', userId)
+                .single();
+            if (error) return null;
+            return data as SpacePermission;
+          } catch (e) { return null; }
+      }
+      return null;
+  },
+
   updateSpacePermissions: async (permissions: SpacePermission): Promise<void> => {
       if (isSupabaseConfigured) {
+          const payload = {
+              ...permissions,
+              updatedAt: new Date().toISOString()
+          };
           const { error } = await supabase
               .from('space_permissions')
-              .upsert(permissions);
+              .upsert(payload, { onConflict: 'spaceId,userId' });
           
           if (error) throw new Error(error.message);
       }
   },
+
+  deleteSpacePermission: async (spaceId: string, userId: string): Promise<void> => {
+      if (isSupabaseConfigured) {
+          const { error } = await supabase
+              .from('space_permissions')
+              .delete()
+              .eq('spaceId', spaceId)
+              .eq('userId', userId);
+          if (error) throw new Error(error.message);
+      }
+  },
   
-  // --- ACTIVITIES (NEW) ---
-  getActivities: async (spaceId: string): Promise<Activity[]> => {
+  // --- ACTIVITIES (Enhanced) ---
+  getActivities: async (spaceId: string, limit = 50): Promise<Activity[]> => {
       if (isSupabaseConfigured) {
           try {
               const { data, error } = await supabase
@@ -152,7 +261,24 @@ export const api = {
                 .select('*')
                 .eq('spaceId', spaceId)
                 .order('createdAt', { ascending: false })
-                .limit(50);
+                .limit(limit);
+              
+              if (error && error.code !== '42P01') console.error(error);
+              return (data as Activity[]) || [];
+          } catch (e) { return []; }
+      }
+      return [];
+  },
+
+  getProjectActivities: async (projectId: string, limit = 100): Promise<Activity[]> => {
+      if (isSupabaseConfigured) {
+          try {
+              const { data, error } = await supabase
+                .from('activities')
+                .select('*')
+                .eq('projectId', projectId)
+                .order('createdAt', { ascending: false })
+                .limit(limit);
               
               if (error && error.code !== '42P01') console.error(error);
               return (data as Activity[]) || [];
@@ -168,6 +294,49 @@ export const api = {
               if(error && error.code !== '42P01') console.error("Failed to log activity", error);
           });
       }
+  },
+
+  // --- SPACE BOARD (Get issues for space) ---
+  getSpaceBoard: async (spaceId: string): Promise<Issue[]> => {
+      if (isSupabaseConfigured) {
+          const { data, error } = await supabase
+              .from('issues')
+              .select('*')
+              .eq('spaceId', spaceId)
+              .order('updatedAt', { ascending: false });
+          if (error) console.error(error);
+          return (data as Issue[]) || [];
+      }
+      return [];
+  },
+
+  // Create default spaces for a project
+  createDefaultSpaces: async (projectId: string, createdBy: string): Promise<Space[]> => {
+      const defaultSpaces: Partial<Space>[] = [
+          { name: 'Development', type: 'development' as SpaceType, description: 'Core development tasks and features' },
+          { name: 'Design', type: 'design' as SpaceType, description: 'UI/UX design tasks' },
+          { name: 'QA', type: 'qa' as SpaceType, description: 'Quality assurance and testing' }
+      ];
+
+      const spaces: Space[] = [];
+      for (const sp of defaultSpaces) {
+          const space: Space = {
+              id: `spc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              projectId,
+              name: sp.name!,
+              type: sp.type!,
+              description: sp.description,
+              createdBy,
+              createdAt: new Date().toISOString()
+          };
+          try {
+              const created = await api.createSpace(space);
+              spaces.push(created);
+          } catch (e) {
+              console.error(`Failed to create default space ${sp.name}`, e);
+          }
+      }
+      return spaces;
   },
 
   // --- ISSUES ---

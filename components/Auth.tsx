@@ -26,7 +26,7 @@ export const Auth: React.FC = () => {
   };
 
   return (
-    <div className="h-full w-full bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-100 via-slate-50 to-white overflow-y-auto">
+    <div className="min-h-full w-full bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-100 via-slate-50 to-white overflow-y-auto overflow-x-hidden">
       
       {/* Decorative background elements */}
       <div className="fixed top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
@@ -35,8 +35,8 @@ export const Auth: React.FC = () => {
       </div>
 
       {/* Scrollable Content Container */}
-      <div className="min-h-full flex flex-col items-center justify-center p-6 relative z-10">
-        <div className="w-full max-w-md my-auto">
+      <div className="min-h-full w-full flex flex-col items-center justify-center py-12 px-6 relative z-10">
+        <div className="w-full max-w-md">
           <div className="mb-10 text-center animate-fade-in-up">
             <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-indigo-600 to-violet-600 rounded-2xl shadow-lg shadow-indigo-500/30 mb-6 transform hover:rotate-6 transition-transform duration-300">
               <Zap className="w-8 h-8 text-white" fill="currentColor" />
@@ -205,7 +205,7 @@ export const Auth: React.FC = () => {
             )}
           </div>
           
-          <p className="mt-8 text-center text-sm text-slate-400 font-medium pb-8">
+          <p className="mt-8 text-center text-sm text-slate-400 font-medium">
             &copy; {new Date().getFullYear()} VibeTrack. All rights reserved.
           </p>
         </div>

@@ -95,20 +95,27 @@ export interface Project {
   type: 'software' | 'marketing' | 'business';
 }
 
+export type SpaceType = 'development' | 'frontend' | 'backend' | 'design' | 'qa' | 'marketing' | 'growth' | 'ai_research' | 'general';
+
 export interface Space {
   id: string;
   projectId: string;
   name: string;
-  type: 'development' | 'design' | 'qa' | 'marketing' | 'general';
+  type: SpaceType;
   description?: string;
   createdBy: string;
   createdAt: string;
+  updatedAt?: string;
+  deletedAt?: string | null; // Soft delete
+  icon?: string;
+  color?: string;
 }
 
 export interface SpacePermission {
   id?: string;
   spaceId: string;
   userId: string;
+  canView: boolean;
   canCreateTasks: boolean;
   canEditTasks: boolean;
   canDeleteTasks: boolean;
@@ -116,6 +123,131 @@ export interface SpacePermission {
   canManageSprints: boolean;
   canEditSpace: boolean;
   canDeleteSpace: boolean;
+  canManageMembers: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Default permissions by role
+export const DEFAULT_SPACE_PERMISSIONS: Record<UserRole, Partial<SpacePermission>> = {
+  [UserRole.FOUNDER]: {
+    canView: true,
+    canCreateTasks: true,
+    canEditTasks: true,
+    canDeleteTasks: true,
+    canManageBoard: true,
+    canManageSprints: true,
+    canEditSpace: true,
+    canDeleteSpace: true,
+    canManageMembers: true
+  },
+  [UserRole.CTO]: {
+    canView: true,
+    canCreateTasks: true,
+    canEditTasks: true,
+    canDeleteTasks: false,
+    canManageBoard: true,
+    canManageSprints: true,
+    canEditSpace: true,
+    canDeleteSpace: false,
+    canManageMembers: true
+  },
+  [UserRole.CAO]: {
+    canView: true,
+    canCreateTasks: true,
+    canEditTasks: true,
+    canDeleteTasks: false,
+    canManageBoard: true,
+    canManageSprints: true,
+    canEditSpace: true,
+    canDeleteSpace: false,
+    canManageMembers: true
+  },
+  [UserRole.ADMIN]: {
+    canView: true,
+    canCreateTasks: true,
+    canEditTasks: true,
+    canDeleteTasks: false,
+    canManageBoard: true,
+    canManageSprints: true,
+    canEditSpace: false,
+    canDeleteSpace: false,
+    canManageMembers: false
+  },
+  [UserRole.TEAM_LEAD]: {
+    canView: true,
+    canCreateTasks: true,
+    canEditTasks: true,
+    canDeleteTasks: false,
+    canManageBoard: true,
+    canManageSprints: true,
+    canEditSpace: false,
+    canDeleteSpace: false,
+    canManageMembers: false
+  },
+  [UserRole.PRODUCT_MANAGER]: {
+    canView: true,
+    canCreateTasks: true,
+    canEditTasks: true,
+    canDeleteTasks: false,
+    canManageBoard: true,
+    canManageSprints: true,
+    canEditSpace: false,
+    canDeleteSpace: false,
+    canManageMembers: false
+  },
+  [UserRole.MEMBER]: {
+    canView: true,
+    canCreateTasks: true,
+    canEditTasks: true,
+    canDeleteTasks: false,
+    canManageBoard: false,
+    canManageSprints: false,
+    canEditSpace: false,
+    canDeleteSpace: false,
+    canManageMembers: false
+  },
+  [UserRole.DESIGNER]: {
+    canView: true,
+    canCreateTasks: true,
+    canEditTasks: false,
+    canDeleteTasks: false,
+    canManageBoard: false,
+    canManageSprints: false,
+    canEditSpace: false,
+    canDeleteSpace: false,
+    canManageMembers: false
+  },
+  [UserRole.QA]: {
+    canView: true,
+    canCreateTasks: true,
+    canEditTasks: true,
+    canDeleteTasks: false,
+    canManageBoard: false,
+    canManageSprints: false,
+    canEditSpace: false,
+    canDeleteSpace: false,
+    canManageMembers: false
+  },
+  [UserRole.OPS]: {
+    canView: true,
+    canCreateTasks: true,
+    canEditTasks: true,
+    canDeleteTasks: false,
+    canManageBoard: false,
+    canManageSprints: false,
+    canEditSpace: false,
+    canDeleteSpace: false,
+    canManageMembers: false
+  }
+};
+
+// Space member with role info
+export interface SpaceMember {
+  userId: string;
+  spaceId: string;
+  addedAt: string;
+  addedBy: string;
 }
 
 export interface Team {
@@ -170,11 +302,15 @@ export interface Epic {
 
 export interface Notification {
   id: string;
+  userId?: string;
   title: string;
   message: string;
   read: boolean;
   createdAt: string;
-  type: 'ASSIGNMENT' | 'COMMENT' | 'SYSTEM';
+  type: 'ASSIGNMENT' | 'COMMENT' | 'SYSTEM' | 'SPACE_INVITE' | 'PERMISSION_CHANGE' | 'SPRINT_UPDATE' | 'TASK_UPDATE';
+  spaceId?: string;
+  entityId?: string;
+  entityType?: string;
 }
 
 export interface Issue {
@@ -202,10 +338,42 @@ export interface Issue {
 export interface Activity {
   id: string;
   spaceId: string;
+  projectId?: string;
   userId: string;
-  action: string; // "created task", "moved task", etc.
+  action: ActivityAction;
+  entityType: 'space' | 'task' | 'sprint' | 'member' | 'permission' | 'board' | 'comment' | 'attachment';
+  entityId?: string;
   details: string;
+  metadata?: Record<string, any>;
   createdAt: string;
+}
+
+export type ActivityAction = 
+  | 'space_created'
+  | 'space_updated'
+  | 'space_deleted'
+  | 'space_restored'
+  | 'member_added'
+  | 'member_removed'
+  | 'permission_updated'
+  | 'task_created'
+  | 'task_updated'
+  | 'task_moved'
+  | 'task_deleted'
+  | 'task_assigned'
+  | 'sprint_started'
+  | 'sprint_completed'
+  | 'sprint_task_added'
+  | 'comment_added'
+  | 'attachment_uploaded';
+
+// Sprint velocity per space
+export interface SpaceVelocity {
+  spaceId: string;
+  spaceName: string;
+  tasksTotal: number;
+  tasksCompleted: number;
+  storyPoints: number;
 }
 
 export interface ColumnType {

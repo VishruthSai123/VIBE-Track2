@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { Issue, User, Status, Priority, IssueType, Sprint, Epic, Project, Notification, Workspace, Team, Permission, UserRole, Space, SpacePermission, Activity } from '../types';
+import { Issue, User, Status, Priority, IssueType, Sprint, Epic, Project, Notification, Workspace, Team, Permission, UserRole, Space, SpacePermission, Activity, ActivityAction, SpaceMember, SpaceType, DEFAULT_SPACE_PERMISSIONS } from '../types';
 import { api } from '../services/api';
 import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
 import { hasPermission, setPermissionOverrides } from '../utils/rbac';
@@ -46,10 +46,25 @@ interface ProjectContextType {
   deleteCurrentWorkspace: () => Promise<void>;
   createProject: (name: string, key: string, description: string, type: Project['type']) => Promise<void>;
   
-  createSpace: (name: string, type: Space['type'], description: string) => Promise<boolean>;
+  createSpace: (name: string, type: SpaceType, description: string) => Promise<boolean>;
+  updateSpace: (space: Partial<Space> & { id: string }) => Promise<void>;
+  softDeleteSpace: (id: string) => Promise<void>;
+  restoreSpace: (id: string) => Promise<void>;
   deleteSpace: (id: string) => Promise<void>;
+  
+  // Space Members
+  getSpaceMembers: (spaceId: string) => Promise<SpaceMember[]>;
+  addSpaceMember: (spaceId: string, userId: string) => Promise<void>;
+  removeSpaceMember: (spaceId: string, userId: string) => Promise<void>;
+  
+  // Space Permissions
   saveSpacePermissions: (permissions: SpacePermission) => Promise<void>;
   getSpacePermissions: (spaceId: string) => Promise<SpacePermission[]>;
+  deleteSpacePermission: (spaceId: string, userId: string) => Promise<void>;
+  checkSpacePermission: (permission: keyof SpacePermission) => boolean;
+  
+  // Activity Logging
+  logSpaceActivity: (action: ActivityAction, details: string, entityId?: string) => Promise<void>;
 
   setSearchQuery: (query: string) => void;
   addIssue: (issue: Omit<Issue, 'id' | 'createdAt' | 'updatedAt' | 'comments' | 'subtasks' | 'attachments' | 'projectId'>) => void;
@@ -68,6 +83,7 @@ interface ProjectContextType {
   
   updateProjectInfo: (info: Project) => void;
   updateUser: (userId: string, updates: Partial<User>) => void;
+  updateUserPermissions: (userId: string, permissions: Partial<Record<Permission, boolean>>) => void;
   
   markNotificationRead: (id: string) => void;
   clearNotifications: () => void;
@@ -224,13 +240,6 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const spaces = allSpaces;
   const activeSprint = sprints.find(s => s.status === 'ACTIVE');
 
-  const logActivity = async (action: string, details: string) => {
-      if (!activeSpaceId || !currentUser) return;
-      const activity: Activity = { id: `act-${Date.now()}`, spaceId: activeSpaceId, userId: currentUser.id, action, details, createdAt: new Date().toISOString() };
-      setActivities(prev => [activity, ...prev]);
-      await api.createActivity(activity);
-  };
-
   const checkPermission = (permission: Permission): boolean => {
     if (!currentUser) return false;
     if (currentUser.role === UserRole.FOUNDER) return true;
@@ -241,11 +250,66 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return hasPermission(currentUser.role, permission, currentUser.id);
   };
 
-  // ... Actions ...
-  const login = async (email: string, password?: string) => { if (isSupabaseConfigured && password) { const { error } = await supabase.auth.signInWithPassword({ email, password }); if (error) showToast(error.message, "error"); } };
-  const signup = async (name: string, email: string, workspaceName: string, role: string, password?: string) => { /* ... */ };
-  const resetPassword = async (email: string) => { /* ... */ };
-  const logout = async () => { if (isSupabaseConfigured) await supabase.auth.signOut(); setCurrentUser(null); window.location.reload(); };
+  // --- Authentication Actions ---
+  const login = async (email: string, password?: string) => { 
+    if (isSupabaseConfigured && password) { 
+      const { error } = await supabase.auth.signInWithPassword({ email, password }); 
+      if (error) showToast(error.message, "error"); 
+    } 
+  };
+
+  const signup = async (name: string, email: string, workspaceName: string, role: string, password?: string) => { 
+    if (!isSupabaseConfigured || !password) {
+      showToast("Authentication not configured", "error");
+      return;
+    }
+    try {
+      const { data, error } = await supabase.auth.signUp({ 
+        email, 
+        password,
+        options: {
+          data: { full_name: name, role: role }
+        }
+      });
+      if (error) throw error;
+      
+      if (data.user) {
+        // Create initial workspace for the user
+        const ws: Workspace = { 
+          id: `ws-${Date.now()}`, 
+          name: workspaceName, 
+          ownerId: data.user.id, 
+          members: [data.user.id] 
+        };
+        await api.createWorkspace(ws);
+        showToast("Account created! Please check your email to verify.", "success");
+      }
+    } catch (e: any) { 
+      showToast(e.message || "Signup failed", "error"); 
+    }
+  };
+
+  const resetPassword = async (email: string) => { 
+    if (!isSupabaseConfigured) {
+      showToast("Authentication not configured", "error");
+      return;
+    }
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin + '/reset-password'
+      });
+      if (error) throw error;
+      showToast("Password reset email sent! Check your inbox.", "success");
+    } catch (e: any) {
+      showToast(e.message || "Failed to send reset email", "error");
+    }
+  };
+
+  const logout = async () => { 
+    if (isSupabaseConfigured) await supabase.auth.signOut(); 
+    setCurrentUser(null); 
+    window.location.reload(); 
+  };
 
   const createWorkspace = async (name: string): Promise<boolean> => {
       if (!currentUser) return false;
@@ -257,23 +321,206 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
           return true;
       } catch(e: any) { showToast(e.message, "error"); return false; }
   };
-  const updateWorkspaceDetails = async (workspace: Workspace) => { try { await api.updateWorkspace(workspace); setWorkspaces(prev => prev.map(w => w.id === workspace.id ? workspace : w)); showToast("Updated", "success"); } catch (e: any) { showToast(`Failed: ${e.message}`, "error"); } };
-  const deleteCurrentWorkspace = async () => { if (!activeWorkspaceId) return; try { await api.deleteWorkspace(activeWorkspaceId); setWorkspaces(prev => prev.filter(w => w.id !== activeWorkspaceId)); setActiveWorkspaceId(''); showToast("Deleted", "success"); } catch (e: any) { showToast(`Failed: ${e.message}`, "error"); } };
-  const createProject = async (name: string, key: string, desc: string, type: any) => { /* ... */ };
+  const updateWorkspaceDetails = async (workspace: Workspace) => { 
+    try { 
+      await api.updateWorkspace(workspace); 
+      setWorkspaces(prev => prev.map(w => w.id === workspace.id ? workspace : w)); 
+      showToast("Workspace updated successfully", "success"); 
+    } catch (e: any) { 
+      showToast(`Failed: ${e.message}`, "error"); 
+    } 
+  };
 
-  const createSpace = async (name: string, type: Space['type'], description: string): Promise<boolean> => {
+  const deleteCurrentWorkspace = async () => { 
+    if (!activeWorkspaceId) return; 
+    try { 
+      await api.deleteWorkspace(activeWorkspaceId); 
+      setWorkspaces(prev => prev.filter(w => w.id !== activeWorkspaceId)); 
+      setActiveWorkspaceId(''); 
+      showToast("Workspace deleted", "success"); 
+    } catch (e: any) { 
+      showToast(`Failed: ${e.message}`, "error"); 
+    } 
+  };
+
+  const createProject = async (name: string, key: string, description: string, type: Project['type']) => { 
+    if (!activeWorkspace || !currentUser) {
+      showToast("No active workspace", "error");
+      return;
+    }
+    try {
+      const project: Project = {
+        id: `proj-${Date.now()}`,
+        workspaceId: activeWorkspaceId,
+        name,
+        key: key.toUpperCase(),
+        description,
+        type,
+        leadId: currentUser.id
+      };
+      await api.createProject(project);
+      setAllProjects(prev => [...prev, project]);
+      setActiveProjectId(project.id);
+      showToast("Project created successfully", "success");
+    } catch (e: any) {
+      showToast(`Failed to create project: ${e.message}`, "error");
+    }
+  };
+
+  const createSpace = async (name: string, type: SpaceType, description: string): Promise<boolean> => {
       if (!activeProject || !currentUser) return false;
       try {
-          const sp = { id: `spc-${Date.now()}`, projectId: activeProject.id, name, type, description, createdBy: currentUser.id, createdAt: new Date().toISOString() };
+          const sp: Space = { 
+              id: `spc-${Date.now()}`, 
+              projectId: activeProject.id, 
+              name, 
+              type, 
+              description, 
+              createdBy: currentUser.id, 
+              createdAt: new Date().toISOString() 
+          };
           await api.createSpace(sp);
           setAllSpaces(prev => [...prev, sp]);
           showToast("Space created", "success");
+          
+          // Log activity
+          await logSpaceActivityInternal(sp.id, 'space_created', `Created space "${name}"`);
+          
           return true;
       } catch (e: any) { showToast(e.message, "error"); return false; }
   };
-  const deleteSpace = async (id: string) => { await api.deleteSpace(id); setAllSpaces(prev => prev.filter(s => s.id !== id)); if(activeSpaceId === id) setActiveSpaceId(null); };
-  const saveSpacePermissions = async (perm: SpacePermission) => { await api.updateSpacePermissions(perm); showToast("Permissions updated", "success"); };
-  const getSpacePermissions = async (spaceId: string) => { return await api.getSpacePermissions(spaceId); };
+
+  const updateSpace = async (space: Partial<Space> & { id: string }) => {
+      try {
+          await api.updateSpace(space);
+          setAllSpaces(prev => prev.map(s => s.id === space.id ? { ...s, ...space } : s));
+          showToast("Space updated", "success");
+          await logSpaceActivityInternal(space.id, 'space_updated', `Updated space settings`);
+      } catch (e: any) { 
+          showToast(e.message, "error"); 
+      }
+  };
+
+  const softDeleteSpace = async (id: string) => { 
+      try {
+          await api.softDeleteSpace(id); 
+          setAllSpaces(prev => prev.map(s => s.id === id ? { ...s, deletedAt: new Date().toISOString() } : s)); 
+          if (activeSpaceId === id) setActiveSpaceId(null);
+          showToast("Space moved to trash", "success");
+          await logSpaceActivityInternal(id, 'space_deleted', `Deleted space`);
+      } catch (e: any) {
+          showToast(e.message, "error");
+      }
+  };
+
+  const restoreSpace = async (id: string) => {
+      try {
+          await api.restoreSpace(id);
+          setAllSpaces(prev => prev.map(s => s.id === id ? { ...s, deletedAt: null } : s));
+          showToast("Space restored", "success");
+          await logSpaceActivityInternal(id, 'space_restored', `Restored space`);
+      } catch (e: any) {
+          showToast(e.message, "error");
+      }
+  };
+
+  const deleteSpace = async (id: string) => { 
+      await api.deleteSpace(id); 
+      setAllSpaces(prev => prev.filter(s => s.id !== id)); 
+      if (activeSpaceId === id) setActiveSpaceId(null); 
+  };
+
+  // Space Members
+  const getSpaceMembers = async (spaceId: string): Promise<SpaceMember[]> => {
+      return await api.getSpaceMembers(spaceId);
+  };
+
+  const addSpaceMember = async (spaceId: string, userId: string) => {
+      if (!currentUser) return;
+      const member: SpaceMember = {
+          userId,
+          spaceId,
+          addedAt: new Date().toISOString(),
+          addedBy: currentUser.id
+      };
+      await api.addSpaceMember(member);
+      
+      // Send notification
+      const user = users.find(u => u.id === userId);
+      const space = allSpaces.find(s => s.id === spaceId);
+      if (user && space) {
+          const notif: Notification = {
+              id: `notif-${Date.now()}`,
+              userId,
+              title: "Added to Space",
+              message: `You've been added to the "${space.name}" space`,
+              read: false,
+              createdAt: new Date().toISOString(),
+              type: 'SPACE_INVITE',
+              spaceId
+          };
+          await api.createNotification(notif);
+      }
+      
+      await logSpaceActivityInternal(spaceId, 'member_added', `Added ${user?.name || 'member'} to space`);
+  };
+
+  const removeSpaceMember = async (spaceId: string, userId: string) => {
+      await api.removeSpaceMember(spaceId, userId);
+      const user = users.find(u => u.id === userId);
+      await logSpaceActivityInternal(spaceId, 'member_removed', `Removed ${user?.name || 'member'} from space`);
+  };
+
+  // Space Permissions
+  const saveSpacePermissions = async (perm: SpacePermission) => { 
+      await api.updateSpacePermissions(perm); 
+      showToast("Permissions updated", "success"); 
+      await logSpaceActivityInternal(perm.spaceId, 'permission_updated', `Updated permissions for user`);
+  };
+
+  const getSpacePermissions = async (spaceId: string) => { 
+      return await api.getSpacePermissions(spaceId); 
+  };
+
+  const deleteSpacePermission = async (spaceId: string, userId: string) => {
+      await api.deleteSpacePermission(spaceId, userId);
+  };
+
+  const checkSpacePermission = (permission: keyof SpacePermission): boolean => {
+      if (!currentUser) return false;
+      if (currentUser.role === UserRole.FOUNDER) return true;
+      
+      if (currentSpacePermission) {
+          return !!(currentSpacePermission as any)[permission];
+      }
+      
+      // Fall back to default role permissions
+      const defaults = DEFAULT_SPACE_PERMISSIONS[currentUser.role as UserRole];
+      return defaults ? !!(defaults as any)[permission] : false;
+  };
+
+  // Activity logging (internal helper)
+  const logSpaceActivityInternal = async (spaceId: string, action: ActivityAction, details: string, entityId?: string) => {
+      if (!currentUser) return;
+      const activity: Activity = { 
+          id: `act-${Date.now()}`, 
+          spaceId, 
+          projectId: activeProjectId,
+          userId: currentUser.id, 
+          action, 
+          entityType: 'space',
+          entityId,
+          details, 
+          createdAt: new Date().toISOString() 
+      };
+      setActivities(prev => [activity, ...prev].slice(0, 100));
+      await api.createActivity(activity);
+  };
+
+  const logSpaceActivity = async (action: ActivityAction, details: string, entityId?: string) => {
+      if (!activeSpaceId) return;
+      await logSpaceActivityInternal(activeSpaceId, action, details, entityId);
+  };
   const updateUserPermissions = (userId: string, permissions: any) => { setPermissionOverrides(userId, permissions); showToast("Updated", "success"); };
 
   const addIssue = async (issue: any) => { 
@@ -283,31 +530,56 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // FIX: Use setRawIssues here
       setRawIssues(prev => [...prev, newIssue]);
       await api.createIssue(newIssue);
-      logActivity("Created Issue", newIssue.title);
+      if (activeSpaceId) {
+          await logSpaceActivityInternal(activeSpaceId, 'task_created', `Created issue "${newIssue.title}"`, newIssue.id);
+      }
   };
 
   const updateIssue = async (id: string, updates: any) => { 
       // FIX: Use setRawIssues here
       setRawIssues(prev => prev.map(i => i.id === id ? { ...i, ...updates } : i)); 
       await api.updateIssue({ id, ...updates } as Issue); 
-      if (updates.status) logActivity("Moved Issue", `${id} to ${updates.status}`);
+      if (updates.status && activeSpaceId) {
+          await logSpaceActivityInternal(activeSpaceId, 'task_moved', `Moved ${id} to ${updates.status}`, id);
+      }
   };
   
   const deleteIssue = async (id: string) => { 
       // FIX: Use setRawIssues here
       setRawIssues(prev => prev.filter(i => i.id !== id)); 
       await api.deleteIssue(id); 
-      logActivity("Deleted Issue", id); 
+      if (activeSpaceId) {
+          await logSpaceActivityInternal(activeSpaceId, 'task_deleted', `Deleted issue ${id}`, id);
+      }
   };
   
-  const addComment = async (id: string, text: string, userId: string) => { /* ... */ };
+  const addComment = async (issueId: string, text: string, userId: string) => { 
+    const issue = rawIssues.find(i => i.id === issueId);
+    if (!issue) return;
+    
+    const newComment = {
+      id: `cmt-${Date.now()}`,
+      userId,
+      text,
+      createdAt: new Date().toISOString()
+    };
+    
+    const updatedComments = [...issue.comments, newComment];
+    setRawIssues(prev => prev.map(i => i.id === issueId ? { ...i, comments: updatedComments } : i));
+    await api.updateIssue({ ...issue, comments: updatedComments });
+    if (activeSpaceId) {
+        await logSpaceActivityInternal(activeSpaceId, 'comment_added', `Commented on ${issueId}`, issueId);
+    }
+  };
   
   const createSprint = async (name: string, goal: string, startDate: string, endDate: string, capacity: number): Promise<boolean> => { 
       if(!activeProject) return false;
       const s = { id: `sp-${Date.now()}`, projectId: activeProject.id, name, goal, startDate, endDate, capacity, status: 'PLANNED' as const };
       await api.createSprint(s);
       setAllSprints(prev => [...prev, s]);
-      logActivity("Created Sprint", name);
+      if (activeSpaceId) {
+          await logSpaceActivityInternal(activeSpaceId, 'sprint_started', `Created sprint "${name}"`);
+      }
       return true;
   };
 
@@ -336,14 +608,108 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return true;
   };
   
-  const addMemberToTeam = (tid: string, uid: string) => { /* ... */ };
-  const removeMemberFromTeam = (tid: string, uid: string) => { /* ... */ };
-  const inviteUser = async (email: string) => { /* ... */ };
-  const updateProjectInfo = (info: Project) => { /* ... */ };
-  const updateUser = (uid: string, data: any) => { /* ... */ };
-  const uploadAttachment = async (file: File) => { return await api.uploadFile(file); };
-  const markNotificationRead = (id: string) => { /* ... */ };
-  const clearNotifications = () => { /* ... */ };
+  const addMemberToTeam = async (teamId: string, userId: string) => { 
+    const team = allTeams.find(t => t.id === teamId);
+    if (!team || team.members.includes(userId)) return;
+    
+    const updatedTeam = { ...team, members: [...team.members, userId] };
+    setAllTeams(prev => prev.map(t => t.id === teamId ? updatedTeam : t));
+    try {
+      await api.updateTeam(updatedTeam);
+      showToast("Member added to team", "success");
+    } catch (e: any) {
+      showToast(`Failed: ${e.message}`, "error");
+    }
+  };
+
+  const removeMemberFromTeam = async (teamId: string, userId: string) => { 
+    const team = allTeams.find(t => t.id === teamId);
+    if (!team) return;
+    
+    const updatedTeam = { ...team, members: team.members.filter(m => m !== userId) };
+    setAllTeams(prev => prev.map(t => t.id === teamId ? updatedTeam : t));
+    try {
+      await api.updateTeam(updatedTeam);
+      showToast("Member removed from team", "success");
+    } catch (e: any) {
+      showToast(`Failed: ${e.message}`, "error");
+    }
+  };
+
+  const inviteUser = async (email: string) => { 
+    if (!activeWorkspace || !currentUser) {
+      showToast("No active workspace", "error");
+      return;
+    }
+    try {
+      // Create a notification/invitation for the user
+      const notification: Notification = {
+        id: `notif-${Date.now()}`,
+        title: "Workspace Invitation",
+        message: `You've been invited to join ${activeWorkspace.name}`,
+        read: false,
+        createdAt: new Date().toISOString(),
+        type: 'SYSTEM'
+      };
+      // In a real app, this would send an email invitation
+      // For now, we'll just show a success message
+      showToast(`Invitation sent to ${email}`, "success");
+    } catch (e: any) {
+      showToast(`Failed to invite: ${e.message}`, "error");
+    }
+  };
+
+  const updateProjectInfo = async (project: Project) => { 
+    try {
+      await api.updateProject(project);
+      setAllProjects(prev => prev.map(p => p.id === project.id ? project : p));
+      showToast("Project updated successfully", "success");
+    } catch (e: any) {
+      showToast(`Failed to update project: ${e.message}`, "error");
+    }
+  };
+
+  const updateUser = async (userId: string, updates: Partial<User>) => { 
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
+    
+    const updatedUser = { ...user, ...updates };
+    setUsers(prev => prev.map(u => u.id === userId ? updatedUser : u));
+    
+    if (currentUser?.id === userId) {
+      setCurrentUser(updatedUser);
+    }
+    
+    try {
+      if (isSupabaseConfigured) {
+        await supabase.from('profiles').update(updates).eq('id', userId);
+      }
+      showToast("Profile updated", "success");
+    } catch (e: any) {
+      showToast(`Failed to update profile: ${e.message}`, "error");
+    }
+  };
+
+  const uploadAttachment = async (file: File) => { 
+    return await api.uploadFile(file); 
+  };
+
+  const markNotificationRead = (id: string) => { 
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    // Optionally persist to database
+    if (isSupabaseConfigured) {
+      supabase.from('notifications').update({ read: true }).eq('id', id).then(() => {});
+    }
+  };
+
+  const clearNotifications = () => { 
+    const notifIds = notifications.map(n => n.id);
+    setNotifications([]);
+    // Optionally delete from database
+    if (isSupabaseConfigured && currentUser) {
+      supabase.from('notifications').delete().eq('userId', currentUser.id).then(() => {});
+    }
+  };
 
   return (
     <ProjectContext.Provider value={{ 
@@ -351,7 +717,10 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       activeWorkspace, activeProject, activeSpace, activeSprint, currentUser, searchQuery, isAuthenticated, isLoading,
       login, signup, logout, resetPassword, setActiveWorkspace: setActiveWorkspaceId, setActiveProject: setActiveProjectId, setActiveSpace: setActiveSpaceId,
       createWorkspace, updateWorkspaceDetails, deleteCurrentWorkspace, createProject, 
-      createSpace, deleteSpace, saveSpacePermissions, getSpacePermissions, updateUserPermissions,
+      createSpace, updateSpace, softDeleteSpace, restoreSpace, deleteSpace,
+      getSpaceMembers, addSpaceMember, removeSpaceMember,
+      saveSpacePermissions, getSpacePermissions, deleteSpacePermission, checkSpacePermission,
+      logSpaceActivity, updateUserPermissions,
       setSearchQuery, addIssue, updateIssue, deleteIssue, addComment, createSprint, startSprint, completeSprint,
       createTeam, addMemberToTeam, removeMemberFromTeam, inviteUser, updateProjectInfo, updateUser, markNotificationRead, clearNotifications, checkPermission,
       toasts, showToast, removeToast, uploadAttachment

@@ -78,6 +78,13 @@ const AppContent: React.FC = () => {
     const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
+    // Effect: Auto-switch to Board when a space is entered (must be before any returns)
+    useEffect(() => {
+        if (activeSpace) {
+            setCurrentView('board');
+        }
+    }, [activeSpace]);
+
     // 1. Loading State
     if (isLoading) {
         return (
@@ -140,13 +147,6 @@ const AppContent: React.FC = () => {
     const handleSpaceBannerClick = () => {
         setCurrentView('spaces');
     };
-
-    // Effect: Auto-switch to Board when a space is entered
-    useEffect(() => {
-        if (activeSpace) {
-            setCurrentView('board');
-        }
-    }, [activeSpace]);
 
     const renderView = () => {
         // If viewing Settings, Profile, Teams, or Spaces, allow it even without active project

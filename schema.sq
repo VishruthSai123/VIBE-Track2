@@ -66,6 +66,32 @@ create table if not exists public.teams (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- SPACE PERMISSIONS (NEW)
+create table if not exists public.space_permissions (
+  id text primary key,
+  "spaceId" text references public.spaces(id) on delete cascade,
+  "userId" uuid references public.profiles(id) on delete cascade,
+  "canCreateTasks" boolean default false,
+  "canEditTasks" boolean default false,
+  "canDeleteTasks" boolean default false,
+  "canManageBoard" boolean default false,
+  "canManageSprints" boolean default false,
+  "canEditSpace" boolean default false,
+  "canDeleteSpace" boolean default false,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  unique("spaceId", "userId")
+);
+
+-- ACTIVITIES (NEW)
+create table if not exists public.activities (
+  id text primary key,
+  "spaceId" text references public.spaces(id) on delete cascade,
+  "userId" uuid references public.profiles(id),
+  action text not null,
+  details text,
+  "createdAt" timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
 -- SPRINTS
 create table if not exists public.sprints (
   id text primary key,
@@ -136,6 +162,8 @@ alter table profiles enable row level security;
 alter table workspaces enable row level security;
 alter table projects enable row level security;
 alter table spaces enable row level security;
+alter table space_permissions enable row level security;
+alter table activities enable row level security;
 alter table teams enable row level security;
 alter table sprints enable row level security;
 alter table epics enable row level security;
@@ -194,6 +222,14 @@ create policy "Project members can view spaces" on spaces for select using (
 create policy "Project members can create spaces" on spaces for insert with check (true);
 create policy "Project members can update spaces" on spaces for update using (true);
 create policy "Project members can delete spaces" on spaces for delete using (true);
+
+-- SPACE PERMISSIONS (NEW)
+create policy "Authenticated users can view space_permissions" on space_permissions for select using (auth.role() = 'authenticated');
+create policy "Authenticated users can manage space_permissions" on space_permissions for all using (auth.role() = 'authenticated');
+
+-- ACTIVITIES (NEW)
+create policy "Authenticated users can view activities" on activities for select using (auth.role() = 'authenticated');
+create policy "Authenticated users can create activities" on activities for insert with check (auth.role() = 'authenticated');
 
 -- ISSUES
 create policy "Project members can view issues" on issues for select using (
