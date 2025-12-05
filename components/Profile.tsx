@@ -1,14 +1,23 @@
 import React, { useState } from 'react';
 import { useProject } from '../store/ProjectContext';
-import { User, CheckCircle, Clock, PieChart as PieIcon, Briefcase } from 'lucide-react';
+import { User, CheckCircle, Clock, PieChart as PieIcon, Briefcase, LogOut } from 'lucide-react';
 import { Status, UserRole } from '../types';
 
 export const Profile: React.FC = () => {
-  const { currentUser, updateUser, issues } = useProject();
-  const [name, setName] = useState(currentUser.name);
-  const [avatar, setAvatar] = useState(currentUser.avatar);
-  const [role, setRole] = useState(currentUser.role);
+  const { currentUser, updateUser, issues, logout } = useProject();
+  const [name, setName] = useState(currentUser?.name || '');
+  const [avatar, setAvatar] = useState(currentUser?.avatar || '');
+  const [role, setRole] = useState(currentUser?.role || '');
   const [isSaved, setIsSaved] = useState(false);
+
+  // Guard against null currentUser
+  if (!currentUser) {
+    return (
+      <div className="h-full flex items-center justify-center bg-slate-50">
+        <p className="text-slate-500">Loading profile...</p>
+      </div>
+    );
+  }
 
   // Stats
   const assignedIssues = issues.filter(i => i.assigneeId === currentUser.id);
@@ -121,6 +130,19 @@ export const Profile: React.FC = () => {
                     </button>
                 </div>
             </form>
+        </div>
+
+        {/* Sign Out Section */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8 mt-6">
+            <h2 className="text-xl font-bold text-slate-800 mb-4">Account</h2>
+            <p className="text-slate-500 mb-4">Sign out of your VibeTrack account on this device.</p>
+            <button
+                onClick={logout}
+                className="flex items-center space-x-2 bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 px-4 py-2.5 rounded-lg font-medium transition-colors border border-red-200"
+            >
+                <LogOut className="w-4 h-4" />
+                <span>Sign Out</span>
+            </button>
         </div>
       </div>
     </div>

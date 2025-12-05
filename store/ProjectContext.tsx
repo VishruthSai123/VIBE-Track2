@@ -435,9 +435,47 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const logout = async () => { 
-    if (isSupabaseConfigured) await supabase.auth.signOut(); 
-    setCurrentUser(null); 
-    window.location.reload(); 
+    try {
+      // Sign out from Supabase first
+      if (isSupabaseConfigured) {
+        await supabase.auth.signOut();
+      }
+      
+      // Reset all state to initial values
+      setCurrentUser(null);
+      setOrganizations([]);
+      setActiveOrgId('');
+      setCurrentOrgRole(null);
+      setWorkspaces([]);
+      setAllProjects([]);
+      setAllSpaces([]);
+      setRawIssues([]);
+      setAllSprints([]);
+      setAllEpics([]);
+      setAllTeams([]);
+      setUsers([]);
+      setNotifications([]);
+      setActivities([]);
+      setPendingInvites([]);
+      setActiveWorkspaceId('');
+      setActiveProjectId('');
+      setActiveSpaceId(null);
+      setSearchQuery('');
+      setCurrentSpacePermission(null);
+      setIsLoading(false);
+      
+      showToast("Signed out successfully", "success");
+    } catch (error: any) {
+      console.error('Logout error:', error);
+      // Force reset even if signOut fails
+      setCurrentUser(null);
+      setOrganizations([]);
+      setActiveOrgId('');
+      setWorkspaces([]);
+      setAllProjects([]);
+      setActiveWorkspaceId('');
+      setActiveProjectId('');
+    }
   };
 
   const createWorkspace = async (name: string): Promise<boolean> => {
