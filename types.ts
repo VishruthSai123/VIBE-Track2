@@ -21,6 +21,37 @@ export enum Status {
   DONE = 'DONE',
 }
 
+// ============================================================
+// ORGANIZATION-LEVEL ROLES (Global within an organization)
+// ============================================================
+export enum OrgRole {
+  FOUNDER = 'Founder',       // Super admin - full control, billing, delete org
+  ADMIN = 'Admin',           // CTO/CAO/PMO - create workspaces, manage projects
+  MANAGER = 'Manager',       // PM/Lead - create sprints, tasks, assign members
+  MEMBER = 'Member',         // Developer, Designer - work on tasks
+  VIEWER = 'Viewer'          // Read-only access
+}
+
+// ============================================================
+// WORKSPACE-LEVEL ROLES (Override org roles at workspace level)
+// ============================================================
+export enum WorkspaceRole {
+  WORKSPACE_ADMIN = 'Workspace Admin',
+  WORKSPACE_MANAGER = 'Workspace Manager',
+  WORKSPACE_MEMBER = 'Workspace Member',
+  WORKSPACE_VIEWER = 'Workspace Viewer'
+}
+
+// ============================================================
+// SPACE-LEVEL ROLES (Granular control within spaces)
+// ============================================================
+export enum SpaceRole {
+  SPACE_OWNER = 'Space Owner',
+  SPACE_CONTRIBUTOR = 'Space Contributor',
+  SPACE_VIEWER = 'Space Viewer'
+}
+
+// Legacy UserRole for backward compatibility
 export enum UserRole {
   FOUNDER = 'Founder',
   CTO = 'CTO',
@@ -35,21 +66,37 @@ export enum UserRole {
 }
 
 export enum Permission {
-  // ... (Existing permissions)
+  // Organization permissions
+  CREATE_ORGANIZATION = 'CREATE_ORGANIZATION',
+  DELETE_ORGANIZATION = 'DELETE_ORGANIZATION',
+  MANAGE_BILLING = 'MANAGE_BILLING',
+  TRANSFER_OWNERSHIP = 'TRANSFER_OWNERSHIP',
+  INVITE_TO_ORG = 'INVITE_TO_ORG',
+  REMOVE_FROM_ORG = 'REMOVE_FROM_ORG',
+  
+  // Workspace permissions
   CREATE_WORKSPACE = 'CREATE_WORKSPACE',
   DELETE_WORKSPACE = 'DELETE_WORKSPACE',
+  EDIT_WORKSPACE = 'EDIT_WORKSPACE',
   MANAGE_WORKSPACE_SETTINGS = 'MANAGE_WORKSPACE_SETTINGS',
+  INVITE_TO_WORKSPACE = 'INVITE_TO_WORKSPACE',
+  REMOVE_FROM_WORKSPACE = 'REMOVE_FROM_WORKSPACE',
   MANAGE_MEMBERS = 'MANAGE_MEMBERS',
   
+  // Project permissions
   CREATE_PROJECT = 'CREATE_PROJECT',
   EDIT_PROJECT = 'EDIT_PROJECT',
   DELETE_PROJECT = 'DELETE_PROJECT',
   MANAGE_ACCESS = 'MANAGE_ACCESS',
   
+  // Space permissions
   CREATE_SPACE = 'CREATE_SPACE',
   EDIT_SPACE = 'EDIT_SPACE',
   DELETE_SPACE = 'DELETE_SPACE',
+  INVITE_TO_SPACE = 'INVITE_TO_SPACE',
+  REMOVE_FROM_SPACE = 'REMOVE_FROM_SPACE',
   
+  // Sprint/Epic/Task permissions
   CREATE_SPRINT = 'CREATE_SPRINT',
   MANAGE_SPRINT = 'MANAGE_SPRINT',
   CREATE_EPIC = 'CREATE_EPIC',
@@ -61,21 +108,81 @@ export enum Permission {
   MANAGE_TEAMS = 'MANAGE_TEAMS',
   
   MANAGE_ROADMAP = 'MANAGE_ROADMAP',
+  VIEW_ANALYTICS = 'VIEW_ANALYTICS',
   VIEW_ONLY = 'VIEW_ONLY'
 }
 
-// ... (Existing Interfaces User, Workspace, Project, etc.)
+// ============================================================
+// ORGANIZATION (Company/Tenant)
+// ============================================================
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;              // URL-friendly identifier
+  ownerId: string;           // Founder's user ID
+  logo?: string;
+  plan?: 'free' | 'starter' | 'pro' | 'enterprise';
+  billingEmail?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// User's membership in an organization
+export interface OrgMember {
+  id?: string;
+  orgId: string;
+  userId: string;
+  role: OrgRole;
+  joinedAt: string;
+  invitedBy?: string;
+}
+
+// User's membership in a workspace
+export interface WorkspaceMember {
+  id?: string;
+  workspaceId: string;
+  userId: string;
+  role: WorkspaceRole;
+  joinedAt: string;
+  invitedBy?: string;
+}
+
+// ============================================================
+// INVITE SYSTEM
+// ============================================================
+export type InviteType = 'organization' | 'workspace' | 'space';
+export type InviteStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
+
+export interface Invite {
+  id: string;
+  email: string;
+  type: InviteType;
+  targetId: string;          // orgId, workspaceId, or spaceId
+  role: string;              // Role to assign upon acceptance
+  status: InviteStatus;
+  token: string;             // Unique invite token for URL
+  expiresAt: string;
+  invitedBy: string;
+  createdAt: string;
+  acceptedAt?: string;
+}
+
+// ============================================================
+// EXISTING ENTITIES (Updated)
+// ============================================================
 export interface User {
   id: string;
   name: string;
   avatar: string;
   email: string;
-  role: string; 
+  role: string;              // Legacy global role
+  orgIds?: string[];         // Organizations user belongs to
   workspaceIds: string[];
 }
 
 export interface Workspace {
   id: string;
+  orgId?: string;            // Parent organization (optional for backward compat)
   name: string;
   ownerId: string;
   members: string[];

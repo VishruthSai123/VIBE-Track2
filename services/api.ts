@@ -1,4 +1,8 @@
-import { Space, SpacePermission, SpaceMember, User, Workspace, Project, Issue, Sprint, Epic, Team, Notification, Activity, ActivityAction, SpaceType } from '../types';
+import { 
+  Space, SpacePermission, SpaceMember, User, Workspace, Project, Issue, Sprint, Epic, Team, 
+  Notification, Activity, ActivityAction, SpaceType,
+  Organization, OrgMember, WorkspaceMember, Invite, OrgRole, WorkspaceRole, InviteStatus
+} from '../types';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 const handleSupabaseError = (error: any) => {
@@ -488,5 +492,470 @@ export const api = {
         return data.publicUrl;
     }
     throw new Error("Supabase not configured");
+  },
+
+  // ============================================================
+  // ORGANIZATIONS
+  // ============================================================
+  getOrganizations: async (userId: string): Promise<Organization[]> => {
+    if (isSupabaseConfigured) {
+      // Get orgs where user is a member
+      const { data: memberData, error: memberError } = await supabase
+        .from('org_members')
+        .select('orgId')
+        .eq('userId', userId);
+      
+      if (memberError) {
+        console.error(memberError);
+        return [];
+      }
+      
+      if (!memberData || memberData.length === 0) return [];
+      
+      const orgIds = memberData.map(m => m.orgId);
+      const { data, error } = await supabase
+        .from('organizations')
+        .select('*')
+        .in('id', orgIds);
+      
+      if (error) console.error(error);
+      return (data as Organization[]) || [];
+    }
+    return [];
+  },
+
+  getOrganizationById: async (orgId: string): Promise<Organization | null> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('organizations')
+        .select('*')
+        .eq('id', orgId)
+        .single();
+      
+      if (error) return null;
+      return data as Organization;
+    }
+    return null;
+  },
+
+  getOrganizationBySlug: async (slug: string): Promise<Organization | null> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('organizations')
+        .select('*')
+        .eq('slug', slug)
+        .single();
+      
+      if (error) return null;
+      return data as Organization;
+    }
+    return null;
+  },
+
+  createOrganization: async (org: Organization): Promise<Organization> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('organizations')
+        .insert(org)
+        .select()
+        .single();
+      
+      if (error) throw new Error(error.message);
+      return data as Organization;
+    }
+    throw new Error("Supabase not configured");
+  },
+
+  updateOrganization: async (org: Partial<Organization> & { id: string }): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('organizations')
+        .update({
+          ...org,
+          updatedAt: new Date().toISOString()
+        })
+        .eq('id', org.id);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  deleteOrganization: async (orgId: string): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('organizations')
+        .delete()
+        .eq('id', orgId);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  // ============================================================
+  // ORGANIZATION MEMBERS
+  // ============================================================
+  getOrgMembers: async (orgId: string): Promise<OrgMember[]> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('org_members')
+        .select('*')
+        .eq('orgId', orgId);
+      
+      if (error) console.error(error);
+      return (data as OrgMember[]) || [];
+    }
+    return [];
+  },
+
+  getOrgMemberRole: async (orgId: string, userId: string): Promise<OrgRole | null> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('org_members')
+        .select('role')
+        .eq('orgId', orgId)
+        .eq('userId', userId)
+        .single();
+      
+      if (error) return null;
+      return data?.role as OrgRole;
+    }
+    return null;
+  },
+
+  addOrgMember: async (member: OrgMember): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('org_members')
+        .insert(member);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  updateOrgMemberRole: async (orgId: string, userId: string, role: OrgRole): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('org_members')
+        .update({ role })
+        .eq('orgId', orgId)
+        .eq('userId', userId);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  removeOrgMember: async (orgId: string, userId: string): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('org_members')
+        .delete()
+        .eq('orgId', orgId)
+        .eq('userId', userId);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  // ============================================================
+  // WORKSPACE MEMBERS (Enhanced)
+  // ============================================================
+  getWorkspaceMembers: async (workspaceId: string): Promise<WorkspaceMember[]> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('workspace_members')
+        .select('*')
+        .eq('workspaceId', workspaceId);
+      
+      if (error && error.code !== '42P01') console.error(error);
+      return (data as WorkspaceMember[]) || [];
+    }
+    return [];
+  },
+
+  getWorkspaceMemberRole: async (workspaceId: string, userId: string): Promise<WorkspaceRole | null> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('workspace_members')
+        .select('role')
+        .eq('workspaceId', workspaceId)
+        .eq('userId', userId)
+        .single();
+      
+      if (error) return null;
+      return data?.role as WorkspaceRole;
+    }
+    return null;
+  },
+
+  addWorkspaceMember: async (member: WorkspaceMember): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('workspace_members')
+        .insert(member);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  updateWorkspaceMemberRole: async (workspaceId: string, userId: string, role: WorkspaceRole): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('workspace_members')
+        .update({ role })
+        .eq('workspaceId', workspaceId)
+        .eq('userId', userId);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  removeWorkspaceMember: async (workspaceId: string, userId: string): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('workspace_members')
+        .delete()
+        .eq('workspaceId', workspaceId)
+        .eq('userId', userId);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  // ============================================================
+  // INVITES SYSTEM
+  // ============================================================
+  getInvitesByEmail: async (email: string): Promise<Invite[]> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('invites')
+        .select('*')
+        .eq('email', email)
+        .eq('status', 'pending')
+        .gt('expiresAt', new Date().toISOString());
+      
+      if (error) console.error(error);
+      return (data as Invite[]) || [];
+    }
+    return [];
+  },
+
+  getInviteByToken: async (token: string): Promise<Invite | null> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('invites')
+        .select('*')
+        .eq('token', token)
+        .single();
+      
+      if (error) return null;
+      return data as Invite;
+    }
+    return null;
+  },
+
+  getInvitesForOrg: async (orgId: string): Promise<Invite[]> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('invites')
+        .select('*')
+        .eq('targetId', orgId)
+        .eq('type', 'organization')
+        .order('createdAt', { ascending: false });
+      
+      if (error) console.error(error);
+      return (data as Invite[]) || [];
+    }
+    return [];
+  },
+
+  getInvitesForWorkspace: async (workspaceId: string): Promise<Invite[]> => {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('invites')
+        .select('*')
+        .eq('targetId', workspaceId)
+        .eq('type', 'workspace')
+        .order('createdAt', { ascending: false });
+      
+      if (error) console.error(error);
+      return (data as Invite[]) || [];
+    }
+    return [];
+  },
+
+  createInvite: async (invite: Invite): Promise<Invite> => {
+    if (isSupabaseConfigured) {
+      // Check if invite already exists
+      const { data: existing } = await supabase
+        .from('invites')
+        .select('*')
+        .eq('email', invite.email)
+        .eq('targetId', invite.targetId)
+        .eq('type', invite.type)
+        .eq('status', 'pending')
+        .single();
+      
+      if (existing) {
+        throw new Error('An invite already exists for this email');
+      }
+
+      const { data, error } = await supabase
+        .from('invites')
+        .insert(invite)
+        .select()
+        .single();
+      
+      if (error) throw new Error(error.message);
+      return data as Invite;
+    }
+    throw new Error("Supabase not configured");
+  },
+
+  acceptInvite: async (token: string, userId: string): Promise<void> => {
+    if (isSupabaseConfigured) {
+      // Get the invite
+      const invite = await api.getInviteByToken(token);
+      
+      if (!invite) throw new Error('Invite not found');
+      if (invite.status !== 'pending') throw new Error('Invite is no longer valid');
+      if (new Date(invite.expiresAt) < new Date()) throw new Error('Invite has expired');
+
+      // Add member based on invite type
+      if (invite.type === 'organization') {
+        await api.addOrgMember({
+          orgId: invite.targetId,
+          userId,
+          role: invite.role as OrgRole,
+          joinedAt: new Date().toISOString(),
+          invitedBy: invite.invitedBy
+        });
+      } else if (invite.type === 'workspace') {
+        await api.addWorkspaceMember({
+          workspaceId: invite.targetId,
+          userId,
+          role: invite.role as WorkspaceRole,
+          joinedAt: new Date().toISOString(),
+          invitedBy: invite.invitedBy
+        });
+      } else if (invite.type === 'space') {
+        await api.addSpaceMember({
+          spaceId: invite.targetId,
+          userId,
+          role: invite.role,
+          canEdit: invite.role !== 'Viewer',
+          canManage: invite.role === 'Space Owner'
+        });
+      }
+
+      // Update invite status
+      const { error } = await supabase
+        .from('invites')
+        .update({
+          status: 'accepted' as InviteStatus,
+          acceptedAt: new Date().toISOString()
+        })
+        .eq('id', invite.id);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  rejectInvite: async (inviteId: string): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('invites')
+        .update({ status: 'rejected' as InviteStatus })
+        .eq('id', inviteId);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  revokeInvite: async (inviteId: string): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('invites')
+        .delete()
+        .eq('id', inviteId);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  resendInvite: async (inviteId: string): Promise<void> => {
+    if (isSupabaseConfigured) {
+      // Generate new token and extend expiry
+      const newToken = `inv-${Date.now()}-${Math.random().toString(36).substr(2, 16)}`;
+      const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
+      
+      const { error } = await supabase
+        .from('invites')
+        .update({
+          token: newToken,
+          expiresAt: newExpiry,
+          status: 'pending' as InviteStatus
+        })
+        .eq('id', inviteId);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  // ============================================================
+  // UTILITY: Generate Invite Token
+  // ============================================================
+  generateInviteToken: (): string => {
+    return `inv-${Date.now()}-${Math.random().toString(36).substr(2, 16)}`;
+  },
+
+  // ============================================================
+  // UTILITY: Create org with founder
+  // ============================================================
+  createOrganizationWithFounder: async (
+    orgData: Omit<Organization, 'id' | 'createdAt' | 'updatedAt'>,
+    founderId: string
+  ): Promise<Organization> => {
+    if (!isSupabaseConfigured) throw new Error("Supabase not configured");
+
+    const org: Organization = {
+      id: `org-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      ...orgData,
+      ownerId: founderId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    // Create organization
+    const createdOrg = await api.createOrganization(org);
+
+    // Add founder as org member with Founder role
+    await api.addOrgMember({
+      orgId: createdOrg.id,
+      userId: founderId,
+      role: OrgRole.FOUNDER,
+      joinedAt: new Date().toISOString()
+    });
+
+    return createdOrg;
+  },
+
+  // ============================================================
+  // OWNERSHIP TRANSFER
+  // ============================================================
+  transferOrgOwnership: async (orgId: string, currentOwnerId: string, newOwnerId: string): Promise<void> => {
+    if (isSupabaseConfigured) {
+      // Verify current owner
+      const org = await api.getOrganizationById(orgId);
+      if (!org || org.ownerId !== currentOwnerId) {
+        throw new Error('Only the current owner can transfer ownership');
+      }
+
+      // Update org owner
+      await api.updateOrganization({ id: orgId, ownerId: newOwnerId });
+
+      // Update member roles
+      await api.updateOrgMemberRole(orgId, newOwnerId, OrgRole.FOUNDER);
+      await api.updateOrgMemberRole(orgId, currentOwnerId, OrgRole.ADMIN);
+    }
   }
 };

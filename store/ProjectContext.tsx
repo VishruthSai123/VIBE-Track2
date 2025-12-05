@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { Issue, User, Status, Priority, IssueType, Sprint, Epic, Project, Notification, Workspace, Team, Permission, UserRole, Space, SpacePermission, Activity, ActivityAction, SpaceMember, SpaceType, DEFAULT_SPACE_PERMISSIONS } from '../types';
+import { Issue, User, Status, Priority, IssueType, Sprint, Epic, Project, Notification, Workspace, Team, Permission, UserRole, Space, SpacePermission, Activity, ActivityAction, SpaceMember, SpaceType, DEFAULT_SPACE_PERMISSIONS, Organization, OrgMember, OrgRole, WorkspaceMember, WorkspaceRole, Invite, InviteType, InviteStatus } from '../types';
 import { api } from '../services/api';
 import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
-import { hasPermission, setPermissionOverrides } from '../utils/rbac';
+import { hasPermission, setPermissionOverrides, hasOrgPermission, hasWorkspacePermission, checkPermissionWithContext, PermissionContext } from '../utils/rbac';
 
 interface Toast {
   id: string;
@@ -11,6 +11,11 @@ interface Toast {
 }
 
 interface ProjectContextType {
+  // Organizations
+  organizations: Organization[];
+  activeOrganization: Organization | null;
+  currentOrgRole: OrgRole | null;
+  
   workspaces: Workspace[];
   projects: Project[];
   spaces: Space[];
@@ -22,6 +27,7 @@ interface ProjectContextType {
   epics: Epic[];
   notifications: Notification[];
   activities: Activity[];
+  pendingInvites: Invite[];
   
   activeWorkspace: Workspace | null;
   activeProject: Project | null;
@@ -34,9 +40,15 @@ interface ProjectContextType {
   isLoading: boolean;
 
   login: (email: string, password?: string) => Promise<void>;
-  signup: (name: string, email: string, workspaceName: string, role: string, password?: string) => Promise<void>;
+  signup: (name: string, email: string, workspaceName: string, role: string, password?: string, orgName?: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   logout: () => void;
+  
+  // Organization actions
+  setActiveOrganization: (id: string) => void;
+  createOrganization: (name: string) => Promise<Organization | null>;
+  updateOrganization: (org: Partial<Organization> & { id: string }) => Promise<void>;
+  
   setActiveWorkspace: (id: string) => void;
   setActiveProject: (id: string) => void;
   setActiveSpace: (id: string | null) => void;
@@ -66,6 +78,12 @@ interface ProjectContextType {
   // Activity Logging
   logSpaceActivity: (action: ActivityAction, details: string, entityId?: string) => Promise<void>;
 
+  // Invite actions
+  createInvite: (email: string, type: InviteType, targetId: string, role: string) => Promise<void>;
+  acceptInvite: (token: string) => Promise<void>;
+  rejectInvite: (inviteId: string) => Promise<void>;
+  loadPendingInvites: () => Promise<void>;
+
   setSearchQuery: (query: string) => void;
   addIssue: (issue: Omit<Issue, 'id' | 'createdAt' | 'updatedAt' | 'comments' | 'subtasks' | 'attachments' | 'projectId'>) => void;
   updateIssue: (id: string, updates: Partial<Issue>) => void;
@@ -92,6 +110,7 @@ interface ProjectContextType {
   uploadAttachment: (file: File) => Promise<string>;
   
   checkPermission: (permission: Permission) => boolean;
+  checkOrgPermission: (permission: Permission) => boolean;
 }
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
@@ -99,6 +118,12 @@ const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Organizations
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [activeOrgId, setActiveOrgId] = useState<string>('');
+  const [currentOrgRole, setCurrentOrgRole] = useState<OrgRole | null>(null);
+  const [pendingInvites, setPendingInvites] = useState<Invite[]>([]);
   
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
@@ -120,6 +145,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [searchQuery, setSearchQuery] = useState('');
 
   const isAuthenticated = !!currentUser;
+  const activeOrganization = organizations.find(o => o.id === activeOrgId) || null;
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
       const id = Date.now().toString();
@@ -258,7 +284,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } 
   };
 
-  const signup = async (name: string, email: string, workspaceName: string, role: string, password?: string) => { 
+  const signup = async (name: string, email: string, workspaceName: string, role: string, password?: string, orgName?: string) => { 
     if (!isSupabaseConfigured || !password) {
       showToast("Authentication not configured", "error");
       return;
@@ -274,14 +300,38 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (error) throw error;
       
       if (data.user) {
-        // Create initial workspace for the user
+        // Generate slug from org name
+        const orgSlug = (orgName || workspaceName).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        
+        // Create organization first (user becomes Founder)
+        const org = await api.createOrganizationWithFounder(
+          {
+            name: orgName || workspaceName,
+            slug: orgSlug,
+            ownerId: data.user.id,
+            plan: 'free'
+          },
+          data.user.id
+        );
+        
+        // Create initial workspace under the organization
         const ws: Workspace = { 
           id: `ws-${Date.now()}`, 
           name: workspaceName, 
           ownerId: data.user.id, 
-          members: [data.user.id] 
+          members: [data.user.id],
+          orgId: org.id
         };
         await api.createWorkspace(ws);
+        
+        // Add user as workspace admin
+        await api.addWorkspaceMember({
+          workspaceId: ws.id,
+          userId: data.user.id,
+          role: WorkspaceRole.WORKSPACE_ADMIN,
+          joinedAt: new Date().toISOString()
+        });
+        
         showToast("Account created! Please check your email to verify.", "success");
       }
     } catch (e: any) { 
@@ -711,8 +761,141 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  // ============================================================
+  // ORGANIZATION ACTIONS
+  // ============================================================
+  const setActiveOrganization = async (orgId: string) => {
+    setActiveOrgId(orgId);
+    // Load organization role for current user
+    if (currentUser) {
+      const role = await api.getOrgMemberRole(orgId, currentUser.id);
+      setCurrentOrgRole(role);
+    }
+    // Filter workspaces by organization
+    const allWs = await api.getWorkspaces();
+    const orgWorkspaces = allWs.filter(ws => ws.orgId === orgId);
+    setWorkspaces(orgWorkspaces);
+    if (orgWorkspaces.length > 0) {
+      setActiveWorkspaceId(orgWorkspaces[0].id);
+    } else {
+      setActiveWorkspaceId('');
+    }
+  };
+
+  const createOrganizationAction = async (name: string): Promise<Organization | null> => {
+    if (!currentUser) return null;
+    try {
+      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const org = await api.createOrganizationWithFounder(
+        { name, slug, ownerId: currentUser.id, plan: 'free' },
+        currentUser.id
+      );
+      setOrganizations(prev => [...prev, org]);
+      showToast(`Organization "${name}" created`, "success");
+      return org;
+    } catch (e: any) {
+      showToast(e.message, "error");
+      return null;
+    }
+  };
+
+  const updateOrganizationAction = async (org: Partial<Organization> & { id: string }) => {
+    try {
+      await api.updateOrganization(org);
+      setOrganizations(prev => prev.map(o => o.id === org.id ? { ...o, ...org } : o));
+      showToast("Organization updated", "success");
+    } catch (e: any) {
+      showToast(e.message, "error");
+    }
+  };
+
+  const checkOrgPermission = (permission: Permission): boolean => {
+    if (!currentUser || !currentOrgRole) return false;
+    if (currentOrgRole === OrgRole.FOUNDER) return true;
+    return hasOrgPermission(currentOrgRole, permission);
+  };
+
+  // ============================================================
+  // INVITE ACTIONS
+  // ============================================================
+  const loadPendingInvites = async () => {
+    if (!currentUser) return;
+    const invites = await api.getInvitesByEmail(currentUser.email);
+    setPendingInvites(invites);
+  };
+
+  const createInviteAction = async (email: string, type: InviteType, targetId: string, role: string) => {
+    if (!currentUser) return;
+    try {
+      const invite: Invite = {
+        id: `inv-${Date.now()}`,
+        email,
+        type,
+        targetId,
+        role,
+        status: 'pending',
+        token: api.generateInviteToken(),
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
+        invitedBy: currentUser.id,
+        createdAt: new Date().toISOString()
+      };
+      await api.createInvite(invite);
+      showToast(`Invitation sent to ${email}`, "success");
+      
+      // Create notification for invitee (if they're already a user)
+      const invitee = users.find(u => u.email === email);
+      if (invitee) {
+        const notif: Notification = {
+          id: `notif-${Date.now()}`,
+          userId: invitee.id,
+          title: "New Invitation",
+          message: `You've been invited to join a ${type}`,
+          read: false,
+          createdAt: new Date().toISOString(),
+          type: 'INVITE'
+        };
+        await api.createNotification(notif);
+      }
+    } catch (e: any) {
+      showToast(e.message, "error");
+    }
+  };
+
+  const acceptInviteAction = async (token: string) => {
+    if (!currentUser) return;
+    try {
+      await api.acceptInvite(token, currentUser.id);
+      showToast("Invitation accepted!", "success");
+      // Reload pending invites and organizations
+      await loadPendingInvites();
+      const orgs = await api.getOrganizations(currentUser.id);
+      setOrganizations(orgs);
+    } catch (e: any) {
+      showToast(e.message, "error");
+    }
+  };
+
+  const rejectInviteAction = async (inviteId: string) => {
+    try {
+      await api.rejectInvite(inviteId);
+      setPendingInvites(prev => prev.filter(i => i.id !== inviteId));
+      showToast("Invitation declined", "info");
+    } catch (e: any) {
+      showToast(e.message, "error");
+    }
+  };
+
   return (
     <ProjectContext.Provider value={{ 
+      // Organizations
+      organizations, activeOrganization, currentOrgRole, pendingInvites,
+      setActiveOrganization, createOrganization: createOrganizationAction, updateOrganization: updateOrganizationAction,
+      checkOrgPermission,
+      
+      // Invites
+      createInvite: createInviteAction, acceptInvite: acceptInviteAction, rejectInvite: rejectInviteAction, loadPendingInvites,
+      
+      // Existing
       workspaces, projects, spaces, teams, issues: filteredIssues, allIssues: rawIssues, users, sprints, epics, notifications, activities,
       activeWorkspace, activeProject, activeSpace, activeSprint, currentUser, searchQuery, isAuthenticated, isLoading,
       login, signup, logout, resetPassword, setActiveWorkspace: setActiveWorkspaceId, setActiveProject: setActiveProjectId, setActiveSpace: setActiveSpaceId,

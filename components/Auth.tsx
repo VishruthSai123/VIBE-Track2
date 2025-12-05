@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useProject } from '../store/ProjectContext';
-import { Zap, Mail, Lock, User, Building, ArrowRight, Briefcase, Loader2, ArrowLeft } from 'lucide-react';
-import { UserRole } from '../types';
+import { Zap, Mail, Lock, User, Building, ArrowRight, Briefcase, Loader2, ArrowLeft, Building2 } from 'lucide-react';
+import { UserRole, OrgRole } from '../types';
 
 export const Auth: React.FC = () => {
   const { login, signup, resetPassword, isLoading } = useProject();
@@ -9,6 +9,7 @@ export const Auth: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [orgName, setOrgName] = useState('');
   const [workspaceName, setWorkspaceName] = useState('');
   const [role, setRole] = useState<string>(UserRole.FOUNDER);
 
@@ -19,7 +20,8 @@ export const Auth: React.FC = () => {
     if (mode === 'LOGIN') {
       login(email, password);
     } else if (mode === 'SIGNUP') {
-      signup(name, email, workspaceName, role, password);
+      // Pass organization name along with other details
+      signup(name, email, workspaceName, role, password, orgName);
     } else if (mode === 'FORGOT') {
       resetPassword(email);
     }
@@ -94,7 +96,24 @@ export const Auth: React.FC = () => {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 ml-1">Workspace</label>
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 ml-1">Organization Name</label>
+                    <div className="relative group">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Building2 className="h-5 w-5 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
+                      </div>
+                      <input 
+                        type="text" 
+                        required 
+                        value={orgName}
+                        onChange={(e) => setOrgName(e.target.value)}
+                        className="block w-full pl-10 pr-3 py-3 bg-white border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-sm"
+                        placeholder="Acme Inc."
+                      />
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1 ml-1">Your organization is the top-level container for all workspaces</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 ml-1">First Workspace</label>
                     <div className="relative group">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                         <Building className="h-5 w-5 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
@@ -105,12 +124,13 @@ export const Auth: React.FC = () => {
                         value={workspaceName}
                         onChange={(e) => setWorkspaceName(e.target.value)}
                         className="block w-full pl-10 pr-3 py-3 bg-white border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-sm"
-                        placeholder="Acme Corp"
+                        placeholder="Product Team"
                       />
                     </div>
+                    <p className="text-xs text-slate-400 mt-1 ml-1">Create your first workspace within the organization</p>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 ml-1">Role</label>
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 ml-1">Your Role</label>
                     <div className="relative group">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                         <Briefcase className="h-5 w-5 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
@@ -128,6 +148,7 @@ export const Auth: React.FC = () => {
                         <svg className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
                       </div>
                     </div>
+                    <p className="text-xs text-slate-400 mt-1 ml-1">Your display role (you'll be Organization Founder automatically)</p>
                   </div>
                 </div>
               )}
