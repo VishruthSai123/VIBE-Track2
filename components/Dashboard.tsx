@@ -75,7 +75,7 @@ export const Dashboard: React.FC = () => {
       {/* ... (Keep existing Status Pie & Burndown) ... */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 h-80">
-               <ResponsiveContainer><PieChart><Pie data={statusData} cx="50%" cy="50%" outerRadius={80} dataKey="value">{statusData.map((e, i) => <Cell key={i} fill={STATUS_COLORS[i % STATUS_COLORS.length]} />)}</Pie><Tooltip /><Legend /></PieChart></ResponsiveContainer>
+               <ResponsiveContainer width="100%" height="100%" minHeight={200}><PieChart><Pie data={statusData} cx="50%" cy="50%" outerRadius={80} dataKey="value">{statusData.map((e, i) => <Cell key={i} fill={STATUS_COLORS[i % STATUS_COLORS.length]} />)}</Pie><Tooltip /><Legend /></PieChart></ResponsiveContainer>
            </div>
       </div>
     </div>

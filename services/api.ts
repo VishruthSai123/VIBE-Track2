@@ -499,27 +499,40 @@ export const api = {
   // ============================================================
   getOrganizations: async (userId: string): Promise<Organization[]> => {
     if (isSupabaseConfigured) {
-      // Get orgs where user is a member
-      const { data: memberData, error: memberError } = await supabase
-        .from('org_members')
-        .select('orgId')
-        .eq('userId', userId);
-      
-      if (memberError) {
-        console.error(memberError);
+      try {
+        // Get orgs where user is a member
+        const { data: memberData, error: memberError } = await supabase
+          .from('org_members')
+          .select('orgId')
+          .eq('userId', userId);
+        
+        // Handle table not existing or other errors gracefully
+        if (memberError) {
+          // 42P01 = table doesn't exist, PGRST116 = no rows
+          if (memberError.code === '42P01' || memberError.code === 'PGRST116') {
+            return [];
+          }
+          console.error('getOrganizations memberError:', memberError);
+          return [];
+        }
+        
+        if (!memberData || memberData.length === 0) return [];
+        
+        const orgIds = memberData.map(m => m.orgId);
+        const { data, error } = await supabase
+          .from('organizations')
+          .select('*')
+          .in('id', orgIds);
+        
+        if (error) {
+          if (error.code === '42P01') return [];
+          console.error('getOrganizations error:', error);
+        }
+        return (data as Organization[]) || [];
+      } catch (e) {
+        console.error('getOrganizations exception:', e);
         return [];
       }
-      
-      if (!memberData || memberData.length === 0) return [];
-      
-      const orgIds = memberData.map(m => m.orgId);
-      const { data, error } = await supabase
-        .from('organizations')
-        .select('*')
-        .in('id', orgIds);
-      
-      if (error) console.error(error);
-      return (data as Organization[]) || [];
     }
     return [];
   },
@@ -609,15 +622,19 @@ export const api = {
 
   getOrgMemberRole: async (orgId: string, userId: string): Promise<OrgRole | null> => {
     if (isSupabaseConfigured) {
-      const { data, error } = await supabase
-        .from('org_members')
-        .select('role')
-        .eq('orgId', orgId)
-        .eq('userId', userId)
-        .single();
-      
-      if (error) return null;
-      return data?.role as OrgRole;
+      try {
+        const { data, error } = await supabase
+          .from('org_members')
+          .select('role')
+          .eq('orgId', orgId)
+          .eq('userId', userId)
+          .single();
+        
+        if (error) return null;
+        return data?.role as OrgRole;
+      } catch (e) {
+        return null;
+      }
     }
     return null;
   },
@@ -726,15 +743,24 @@ export const api = {
   // ============================================================
   getInvitesByEmail: async (email: string): Promise<Invite[]> => {
     if (isSupabaseConfigured) {
-      const { data, error } = await supabase
-        .from('invites')
-        .select('*')
-        .eq('email', email)
-        .eq('status', 'pending')
-        .gt('expiresAt', new Date().toISOString());
-      
-      if (error) console.error(error);
-      return (data as Invite[]) || [];
+      try {
+        const { data, error } = await supabase
+          .from('invites')
+          .select('*')
+          .eq('email', email)
+          .eq('status', 'pending')
+          .gt('expiresAt', new Date().toISOString());
+        
+        // Handle table not existing gracefully
+        if (error) {
+          if (error.code === '42P01') return [];
+          console.error('getInvitesByEmail error:', error);
+        }
+        return (data as Invite[]) || [];
+      } catch (e) {
+        console.error('getInvitesByEmail exception:', e);
+        return [];
+      }
     }
     return [];
   },

@@ -179,9 +179,23 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
                 await supabase.from('profiles').insert(newProfile);
                 userObj = newProfile;
             }
-            // Load organizations for this user first
-            const userOrgs = await api.getOrganizations(userObj.id);
-            const allUsers = await api.getUsers();
+            
+            // Load data with graceful error handling
+            let userOrgs: Organization[] = [];
+            let allUsers: User[] = [];
+            let invites: Invite[] = [];
+            
+            try {
+                userOrgs = await api.getOrganizations(userObj.id);
+            } catch (e) {
+                console.error('Failed to load organizations:', e);
+            }
+            
+            try {
+                allUsers = await api.getUsers();
+            } catch (e) {
+                console.error('Failed to load users:', e);
+            }
             
             if (mounted) {
                 setCurrentUser(userObj); 
@@ -193,37 +207,59 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
                     const firstOrg = userOrgs[0];
                     setActiveOrgId(firstOrg.id);
                     
-                    // Get user's role in this org
-                    const orgRole = await api.getOrgMemberRole(firstOrg.id, userObj.id);
-                    setCurrentOrgRole(orgRole);
+                    // Get user's role in this org (graceful failure)
+                    try {
+                        const orgRole = await api.getOrgMemberRole(firstOrg.id, userObj.id);
+                        setCurrentOrgRole(orgRole);
+                    } catch (e) {
+                        console.error('Failed to get org role:', e);
+                    }
                     
                     // Load workspaces for this org only
-                    const allWs = await api.getWorkspaces();
-                    const orgWorkspaces = allWs.filter(ws => ws.orgId === firstOrg.id);
-                    setWorkspaces(orgWorkspaces);
-                    
-                    if (orgWorkspaces.length > 0) {
-                        setActiveWorkspaceId(orgWorkspaces[0].id);
+                    try {
+                        const allWs = await api.getWorkspaces();
+                        const orgWorkspaces = allWs.filter(ws => ws.orgId === firstOrg.id);
+                        setWorkspaces(orgWorkspaces);
+                        
+                        if (orgWorkspaces.length > 0) {
+                            setActiveWorkspaceId(orgWorkspaces[0].id);
+                        }
+                    } catch (e) {
+                        console.error('Failed to load workspaces:', e);
                     }
                 } else {
-                    // Fallback: Load all workspaces (legacy mode for users without orgs)
-                    const wsData = await api.getWorkspaces();
-                    if (wsData.length > 0) {
-                        setWorkspaces(wsData);
-                        setActiveWorkspaceId(wsData[0].id);
+                    // Fallback: Load all workspaces (legacy mode or new user)
+                    try {
+                        const wsData = await api.getWorkspaces();
+                        if (wsData.length > 0) {
+                            setWorkspaces(wsData);
+                            setActiveWorkspaceId(wsData[0].id);
+                        }
+                    } catch (e) {
+                        console.error('Failed to load workspaces:', e);
                     }
                 }
                 
-                // Load pending invites for this user
-                const invites = await api.getInvitesByEmail(userObj.email);
-                setPendingInvites(invites);
+                // Load pending invites for this user (graceful failure)
+                try {
+                    invites = await api.getInvitesByEmail(userObj.email);
+                    setPendingInvites(invites);
+                } catch (e) {
+                    console.error('Failed to load invites:', e);
+                }
             }
-        } catch (error) { console.error(error); } finally { if (mounted) setIsLoading(false); }
+        } catch (error) { console.error('Session handling error:', error); } finally { if (mounted) setIsLoading(false); }
     };
     const init = async () => {
         if (!isSupabaseConfigured) { if (mounted) setIsLoading(false); return; }
-        const { data: { session } } = await supabase.auth.getSession(); await handleSession(session);
-        supabase.auth.onAuthStateChange(async (_, session) => await handleSession(session));
+        try {
+            const { data: { session } } = await supabase.auth.getSession(); 
+            await handleSession(session);
+            supabase.auth.onAuthStateChange(async (_, session) => await handleSession(session));
+        } catch (e) {
+            console.error('Auth init error:', e);
+            if (mounted) setIsLoading(false);
+        }
     };
     init();
     return () => { mounted = false; };
