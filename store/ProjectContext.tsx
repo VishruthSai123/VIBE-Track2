@@ -41,6 +41,7 @@ interface ProjectContextType {
 
   login: (email: string, password?: string) => Promise<void>;
   signup: (name: string, email: string, workspaceName: string, role: string, password?: string, orgName?: string) => Promise<void>;
+  signupWithInvite: (name: string, email: string, password: string, inviteToken: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   logout: () => void;
   
@@ -370,6 +371,53 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  // Signup for invited users - they don't create an org, just accept the invite
+  const signupWithInvite = async (name: string, email: string, password: string, inviteToken: string) => {
+    if (!isSupabaseConfigured) {
+      showToast("Authentication not configured", "error");
+      return;
+    }
+    try {
+      // First verify the invite is valid
+      const invite = await api.getInviteByToken(inviteToken);
+      if (!invite) {
+        showToast("Invalid or expired invite link", "error");
+        return;
+      }
+      if (invite.status !== 'pending') {
+        showToast("This invite has already been used", "error");
+        return;
+      }
+      if (new Date(invite.expiresAt) < new Date()) {
+        showToast("This invite has expired", "error");
+        return;
+      }
+      // Verify email matches invite (if specified)
+      if (invite.email && invite.email.toLowerCase() !== email.toLowerCase()) {
+        showToast("Email doesn't match the invite", "error");
+        return;
+      }
+
+      // Create the user account
+      const { data, error } = await supabase.auth.signUp({ 
+        email, 
+        password,
+        options: {
+          data: { full_name: name, role: 'Member' }
+        }
+      });
+      if (error) throw error;
+      
+      if (data.user) {
+        // Accept the invite - this adds them to the org/workspace/space
+        await api.acceptInvite(inviteToken, data.user.id);
+        showToast("Account created! You've joined the team.", "success");
+      }
+    } catch (e: any) { 
+      showToast(e.message || "Signup failed", "error"); 
+    }
+  };
+
   const resetPassword = async (email: string) => { 
     if (!isSupabaseConfigured) {
       showToast("Authentication not configured", "error");
@@ -395,8 +443,26 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const createWorkspace = async (name: string): Promise<boolean> => {
       if (!currentUser) return false;
       try {
-          const ws = { id: `ws-${Date.now()}`, name, ownerId: currentUser.id, members: [currentUser.id] };
+          // New workspaces go under the active organization
+          const ws: Workspace = { 
+            id: `ws-${Date.now()}`, 
+            name, 
+            ownerId: currentUser.id, 
+            members: [currentUser.id],
+            orgId: activeOrgId || undefined  // Link to current org
+          };
           await api.createWorkspace(ws);
+          
+          // Also add user as workspace admin
+          if (activeOrgId) {
+            await api.addWorkspaceMember({
+              workspaceId: ws.id,
+              userId: currentUser.id,
+              role: WorkspaceRole.WORKSPACE_ADMIN,
+              joinedAt: new Date().toISOString()
+            });
+          }
+          
           setWorkspaces(prev => [...prev, ws]);
           setActiveWorkspaceId(ws.id);
           return true;
@@ -858,6 +924,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const createInviteAction = async (email: string, type: InviteType, targetId: string, role: string) => {
     if (!currentUser) return;
     try {
+      const token = api.generateInviteToken();
       const invite: Invite = {
         id: `inv-${Date.now()}`,
         email,
@@ -865,16 +932,28 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         targetId,
         role,
         status: 'pending',
-        token: api.generateInviteToken(),
+        token,
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
         invitedBy: currentUser.id,
         createdAt: new Date().toISOString()
       };
       await api.createInvite(invite);
-      showToast(`Invitation sent to ${email}`, "success");
+      
+      // Generate invite URL for sharing
+      const inviteUrl = `${window.location.origin}?invite=${token}&email=${encodeURIComponent(email)}`;
+      
+      // Copy to clipboard
+      try {
+        await navigator.clipboard.writeText(inviteUrl);
+        showToast(`Invitation created! Link copied to clipboard.`, "success");
+      } catch {
+        showToast(`Invitation sent to ${email}`, "success");
+      }
+      
+      console.log('Invite URL:', inviteUrl); // For debugging
       
       // Create notification for invitee (if they're already a user)
-      const invitee = users.find(u => u.email === email);
+      const invitee = users.find(u => u.email.toLowerCase() === email.toLowerCase());
       if (invitee) {
         const notif: Notification = {
           id: `notif-${Date.now()}`,
@@ -929,7 +1008,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // Existing
       workspaces, projects, spaces, teams, issues: filteredIssues, allIssues: rawIssues, users, sprints, epics, notifications, activities,
       activeWorkspace, activeProject, activeSpace, activeSprint, currentUser, searchQuery, isAuthenticated, isLoading,
-      login, signup, logout, resetPassword, setActiveWorkspace: setActiveWorkspaceId, setActiveProject: setActiveProjectId, setActiveSpace: setActiveSpaceId,
+      login, signup, signupWithInvite, logout, resetPassword, setActiveWorkspace: setActiveWorkspaceId, setActiveProject: setActiveProjectId, setActiveSpace: setActiveSpaceId,
       createWorkspace, updateWorkspaceDetails, deleteCurrentWorkspace, createProject, 
       createSpace, updateSpace, softDeleteSpace, restoreSpace, deleteSpace,
       getSpaceMembers, addSpaceMember, removeSpaceMember,

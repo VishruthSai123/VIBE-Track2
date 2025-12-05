@@ -402,3 +402,22 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.invites TO authenticated;
 -- Run this script in your Supabase SQL editor
 -- All operations are idempotent (safe to re-run)
 -- ==============================================================================
+
+-- Helper: Update projects to have workspaceId foreign key reference if not exists
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'projects_workspaceid_fkey' 
+    AND table_name = 'projects'
+  ) THEN
+    -- Add constraint if missing (may already exist)
+    BEGIN
+      ALTER TABLE public.projects 
+      ADD CONSTRAINT projects_workspaceid_fkey 
+      FOREIGN KEY ("workspaceId") REFERENCES public.workspaces(id) ON DELETE CASCADE;
+    EXCEPTION WHEN duplicate_object THEN
+      NULL; -- Ignore if already exists
+    END;
+  END IF;
+END $$;

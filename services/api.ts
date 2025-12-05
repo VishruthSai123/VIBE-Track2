@@ -830,6 +830,28 @@ export const api = {
           invitedBy: invite.invitedBy
         });
       } else if (invite.type === 'workspace') {
+        // First, get the workspace to find its org
+        const { data: workspace } = await supabase
+          .from('workspaces')
+          .select('*')
+          .eq('id', invite.targetId)
+          .single();
+        
+        // If workspace belongs to an org, also add user to org as Member
+        if (workspace?.orgId) {
+          // Check if already an org member
+          const existingOrgMember = await api.getOrgMemberRole(workspace.orgId, userId);
+          if (!existingOrgMember) {
+            await api.addOrgMember({
+              orgId: workspace.orgId,
+              userId,
+              role: OrgRole.MEMBER, // Workspace invites give basic org membership
+              joinedAt: new Date().toISOString(),
+              invitedBy: invite.invitedBy
+            });
+          }
+        }
+        
         await api.addWorkspaceMember({
           workspaceId: invite.targetId,
           userId,
@@ -838,6 +860,28 @@ export const api = {
           invitedBy: invite.invitedBy
         });
       } else if (invite.type === 'space') {
+        // Get space -> project -> workspace -> org chain
+        const { data: space } = await supabase
+          .from('spaces')
+          .select('*, projects!inner(*, workspaces!inner(*))')
+          .eq('id', invite.targetId)
+          .single();
+        
+        if (space?.projects?.workspaces?.orgId) {
+          const orgId = space.projects.workspaces.orgId;
+          // Add to org if not already member
+          const existingOrgMember = await api.getOrgMemberRole(orgId, userId);
+          if (!existingOrgMember) {
+            await api.addOrgMember({
+              orgId,
+              userId,
+              role: OrgRole.MEMBER,
+              joinedAt: new Date().toISOString(),
+              invitedBy: invite.invitedBy
+            });
+          }
+        }
+        
         await api.addSpaceMember({
           spaceId: invite.targetId,
           userId,
