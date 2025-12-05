@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useProject } from '../store/ProjectContext';
-import { Zap, Mail, Lock, User, Building, ArrowRight, Briefcase, Loader2, ArrowLeft, Building2 } from 'lucide-react';
-import { UserRole, OrgRole } from '../types';
+import { Zap, Mail, Lock, User, Building, ArrowRight, Loader2, ArrowLeft, Building2 } from 'lucide-react';
 
 export const Auth: React.FC = () => {
   const { login, signup, resetPassword, isLoading } = useProject();
@@ -11,7 +10,6 @@ export const Auth: React.FC = () => {
   const [name, setName] = useState('');
   const [orgName, setOrgName] = useState('');
   const [workspaceName, setWorkspaceName] = useState('');
-  const [role, setRole] = useState<string>(UserRole.FOUNDER);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,8 +18,8 @@ export const Auth: React.FC = () => {
     if (mode === 'LOGIN') {
       login(email, password);
     } else if (mode === 'SIGNUP') {
-      // Pass organization name along with other details
-      signup(name, email, workspaceName, role, password, orgName);
+      // User automatically becomes Org Founder - no role selection needed
+      signup(name, email, workspaceName, 'Founder', password, orgName);
     } else if (mode === 'FORGOT') {
       resetPassword(email);
     }
@@ -129,26 +127,10 @@ export const Auth: React.FC = () => {
                     </div>
                     <p className="text-xs text-slate-400 mt-1 ml-1">Create your first workspace within the organization</p>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 ml-1">Your Role</label>
-                    <div className="relative group">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Briefcase className="h-5 w-5 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
-                      </div>
-                      <select 
-                        value={role}
-                        onChange={(e) => setRole(e.target.value)}
-                        className="block w-full pl-10 pr-10 py-3 bg-white border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-sm appearance-none"
-                      >
-                        {Object.values(UserRole).map(r => (
-                          <option key={r} value={r}>{r}</option>
-                        ))}
-                      </select>
-                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                        <svg className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-                      </div>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-1 ml-1">Your display role (you'll be Organization Founder automatically)</p>
+                  
+                  {/* Info: User will be Organization Founder */}
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
+                    <p className="text-xs text-indigo-700 font-medium">✨ You'll be the Organization Founder with full admin access</p>
                   </div>
                 </div>
               )}

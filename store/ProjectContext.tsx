@@ -178,13 +178,44 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
                 await supabase.from('profiles').insert(newProfile);
                 userObj = newProfile;
             }
-            const [wsData, allUsers] = await Promise.all([api.getWorkspaces(), api.getUsers()]);
+            // Load organizations for this user first
+            const userOrgs = await api.getOrganizations(userObj.id);
+            const allUsers = await api.getUsers();
+            
             if (mounted) {
-                setCurrentUser(userObj); setUsers(allUsers);
-                if (wsData.length > 0) {
-                    setWorkspaces(wsData);
-                    setActiveWorkspaceId(activeWorkspaceId && wsData.some(w => w.id === activeWorkspaceId) ? activeWorkspaceId : wsData[0].id);
+                setCurrentUser(userObj); 
+                setUsers(allUsers);
+                setOrganizations(userOrgs);
+                
+                if (userOrgs.length > 0) {
+                    // Set first org as active
+                    const firstOrg = userOrgs[0];
+                    setActiveOrgId(firstOrg.id);
+                    
+                    // Get user's role in this org
+                    const orgRole = await api.getOrgMemberRole(firstOrg.id, userObj.id);
+                    setCurrentOrgRole(orgRole);
+                    
+                    // Load workspaces for this org only
+                    const allWs = await api.getWorkspaces();
+                    const orgWorkspaces = allWs.filter(ws => ws.orgId === firstOrg.id);
+                    setWorkspaces(orgWorkspaces);
+                    
+                    if (orgWorkspaces.length > 0) {
+                        setActiveWorkspaceId(orgWorkspaces[0].id);
+                    }
+                } else {
+                    // Fallback: Load all workspaces (legacy mode for users without orgs)
+                    const wsData = await api.getWorkspaces();
+                    if (wsData.length > 0) {
+                        setWorkspaces(wsData);
+                        setActiveWorkspaceId(wsData[0].id);
+                    }
                 }
+                
+                // Load pending invites for this user
+                const invites = await api.getInvitesByEmail(userObj.email);
+                setPendingInvites(invites);
             }
         } catch (error) { console.error(error); } finally { if (mounted) setIsLoading(false); }
     };
