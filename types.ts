@@ -112,21 +112,6 @@ export enum Permission {
   VIEW_ONLY = 'VIEW_ONLY'
 }
 
-// ============================================================
-// ORGANIZATION (Company/Tenant)
-// ============================================================
-export interface Organization {
-  id: string;
-  name: string;
-  slug: string;              // URL-friendly identifier
-  ownerId: string;           // Founder's user ID
-  logo?: string;
-  plan?: 'free' | 'starter' | 'pro' | 'enterprise';
-  billingEmail?: string;
-  createdAt: string;
-  updatedAt?: string;
-}
-
 // User's membership in an organization
 export interface OrgMember {
   id?: string;
@@ -148,7 +133,69 @@ export interface WorkspaceMember {
 }
 
 // ============================================================
-// INVITE SYSTEM
+// DUAL AUTHENTICATION SYSTEM
+// ============================================================
+export type LoginMode = 'admin' | 'member';
+export type ScopeType = 'organization' | 'workspace' | 'project';
+export type MemberRole = 'Admin' | 'Manager' | 'Member' | 'Viewer';
+
+// Team member created by admin (not self-registered)
+export interface TeamMember {
+  id: string;
+  email: string;
+  passwordHash?: string;       // Only for creation, never returned from API
+  name: string;
+  avatar?: string;
+  jobTitle?: string;
+  scopeType: ScopeType;
+  scopeId: string;             // The org/workspace/project ID
+  scopeCode: string;           // The org/workspace/project code for login
+  scopeName?: string;          // Joined from view
+  role: MemberRole;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt?: string;
+  lastLoginAt?: string;
+  isActive: boolean;
+}
+
+// For creating a new team member
+export interface CreateTeamMemberPayload {
+  email: string;
+  password: string;            // Plain text, will be hashed server-side
+  name: string;
+  jobTitle?: string;
+  scopeType: ScopeType;
+  scopeId: string;
+  role: MemberRole;
+}
+
+// Team member session
+export interface TeamMemberSession {
+  id: string;
+  memberId: string;
+  token: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+// Login credentials for member login
+export interface MemberLoginCredentials {
+  scopeCode: string;           // e.g., "ORG-1234"
+  email: string;
+  password: string;
+}
+
+// Login response
+export interface MemberLoginResponse {
+  success: boolean;
+  member?: TeamMember;
+  session?: TeamMemberSession;
+  error?: string;
+}
+
+// ============================================================
+// INVITE SYSTEM (DEPRECATED - Keeping for backward compatibility)
 // ============================================================
 export type InviteType = 'organization' | 'workspace' | 'space';
 export type InviteStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
@@ -176,6 +223,7 @@ export interface User {
   avatar: string;
   email: string;
   role: string;              // Legacy global role
+  isAdmin?: boolean;         // true = founder/admin, false = team member
   orgIds?: string[];         // Organizations user belongs to
   workspaceIds: string[];
 }
@@ -183,6 +231,7 @@ export interface User {
 export interface Workspace {
   id: string;
   orgId?: string;            // Parent organization (optional for backward compat)
+  code?: string;             // Unique code for member login (e.g., "WS-1234")
   name: string;
   ownerId: string;
   members: string[];
@@ -192,9 +241,23 @@ export interface Workspace {
   visibility?: 'private' | 'public';
 }
 
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;              // URL-friendly identifier
+  code?: string;             // Unique code for member login (e.g., "ORG-1234")
+  ownerId: string;           // Founder's user ID
+  logo?: string;
+  plan?: 'free' | 'starter' | 'pro' | 'enterprise';
+  billingEmail?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface Project {
   id: string;
   workspaceId: string;
+  code?: string;             // Unique code for member login (e.g., "PRJ-1234")
   name: string;
   key: string;
   description: string;

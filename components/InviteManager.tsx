@@ -2,28 +2,48 @@ import React, { useState, useEffect } from 'react';
 import { useProject } from '../store/ProjectContext';
 import { 
   Mail, Send, X, Check, Clock, UserPlus, Building2, Briefcase, 
-  Layers, AlertCircle, Loader2, Copy, RefreshCw, Trash2, ChevronDown
+  Layers, AlertCircle, Loader2, Copy, RefreshCw, Trash2, ChevronDown, Link
 } from 'lucide-react';
 import { OrgRole, WorkspaceRole, SpaceRole, Invite, InviteType } from '../types';
 
 interface InviteManagerProps {
-  type: InviteType;
-  targetId: string;
-  targetName: string;
+  type?: InviteType;
+  targetId?: string;
+  targetName?: string;
   onClose?: () => void;
 }
 
-export const InviteManager: React.FC<InviteManagerProps> = ({ type, targetId, targetName, onClose }) => {
-  const { createInvite, currentUser, showToast, checkOrgPermission, checkPermission } = useProject();
+export const InviteManager: React.FC<InviteManagerProps> = ({ type: propType, targetId: propTargetId, targetName: propTargetName, onClose }) => {
+  const { createInvite, currentUser, activeOrganization, activeWorkspace, activeSpace } = useProject();
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
-  const [pendingInvites, setPendingInvites] = useState<Invite[]>([]);
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
+  const [inviteType, setInviteType] = useState<InviteType>(propType || 'workspace');
+  const [showTypeDropdown, setShowTypeDropdown] = useState(false);
+
+  // Determine target based on type
+  const getTarget = () => {
+    if (propType && propTargetId) {
+      return { id: propTargetId, name: propTargetName || '' };
+    }
+    switch (inviteType) {
+      case 'organization':
+        return { id: activeOrganization?.id || '', name: activeOrganization?.name || 'Organization' };
+      case 'workspace':
+        return { id: activeWorkspace?.id || '', name: activeWorkspace?.name || 'Workspace' };
+      case 'space':
+        return { id: activeSpace?.id || '', name: activeSpace?.name || 'Space' };
+      default:
+        return { id: '', name: '' };
+    }
+  };
+
+  const target = getTarget();
 
   // Get available roles based on invite type
   const getAvailableRoles = () => {
-    switch (type) {
+    switch (inviteType) {
       case 'organization':
         return [
           { value: OrgRole.ADMIN, label: 'Admin', desc: 'Full access except billing & ownership' },
@@ -51,27 +71,34 @@ export const InviteManager: React.FC<InviteManagerProps> = ({ type, targetId, ta
 
   const roles = getAvailableRoles();
 
+  // Reset role when type changes
   useEffect(() => {
-    if (roles.length > 0 && !role) {
-      setRole(roles[roles.length - 1].value); // Default to lowest role
+    const availableRoles = getAvailableRoles();
+    if (availableRoles.length > 0) {
+      setRole(availableRoles[availableRoles.length - 1].value); // Default to lowest role
     }
-  }, [roles]);
+  }, [inviteType]);
 
-  const getTypeIcon = () => {
-    switch (type) {
+  const getTypeIcon = (t: InviteType) => {
+    switch (t) {
       case 'organization': return <Building2 className="w-5 h-5 text-purple-500" />;
       case 'workspace': return <Briefcase className="w-5 h-5 text-blue-500" />;
       case 'space': return <Layers className="w-5 h-5 text-green-500" />;
     }
   };
 
+  const inviteTypes = [
+    { value: 'organization' as InviteType, label: 'Organization', desc: 'Access to entire org', icon: <Building2 className="w-5 h-5 text-purple-500" /> },
+    { value: 'workspace' as InviteType, label: 'Workspace', desc: 'Access to this workspace', icon: <Briefcase className="w-5 h-5 text-blue-500" /> },
+  ];
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !role) return;
+    if (!email.trim() || !role || !target.id) return;
     
     setIsLoading(true);
     try {
-      await createInvite(email.trim(), type, targetId, role);
+      await createInvite(email.trim(), inviteType, target.id, role);
       setEmail('');
     } catch (error) {
       console.error(error);
@@ -81,6 +108,17 @@ export const InviteManager: React.FC<InviteManagerProps> = ({ type, targetId, ta
   };
 
   const selectedRole = roles.find(r => r.value === role);
+  const selectedType = inviteTypes.find(t => t.value === inviteType);
+
+  // Don't render if no valid target
+  if (!target.id) {
+    return (
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center text-slate-500">
+        <AlertCircle className="w-5 h-5 mx-auto mb-2" />
+        <p className="text-sm">No active {inviteType} to invite to.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden max-w-md w-full">
@@ -91,8 +129,8 @@ export const InviteManager: React.FC<InviteManagerProps> = ({ type, targetId, ta
             <UserPlus className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Invite to {type}</h3>
-            <p className="text-sm text-white/70">{targetName}</p>
+            <h3 className="text-lg font-bold text-white">Invite Team Member</h3>
+            <p className="text-sm text-white/70">{target.name}</p>
           </div>
         </div>
         {onClose && (
@@ -124,6 +162,55 @@ export const InviteManager: React.FC<InviteManagerProps> = ({ type, targetId, ta
           </div>
         </div>
 
+        {/* Invite Type Selection (only if not passed as prop) */}
+        {!propType && (
+          <div>
+            <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5">
+              Invite To
+            </label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowTypeDropdown(!showTypeDropdown)}
+                className="w-full flex items-center justify-between px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-left focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+              >
+                <div className="flex items-center gap-2">
+                  {selectedType?.icon}
+                  <div>
+                    <p className="text-sm font-medium text-slate-900">{selectedType?.label}</p>
+                    <p className="text-xs text-slate-500">{selectedType?.desc}</p>
+                  </div>
+                </div>
+                <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${showTypeDropdown ? 'rotate-180' : ''}`} />
+              </button>
+
+              {showTypeDropdown && (
+                <div className="absolute z-50 bottom-full mb-2 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-y-auto">
+                  {inviteTypes.map((t) => (
+                    <button
+                      key={t.value}
+                      type="button"
+                      onClick={() => { setInviteType(t.value); setShowTypeDropdown(false); }}
+                      className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors text-left ${inviteType === t.value ? 'bg-indigo-50' : ''}`}
+                    >
+                      {t.icon}
+                      <div>
+                        <p className={`text-sm font-medium ${inviteType === t.value ? 'text-indigo-600' : 'text-slate-900'}`}>
+                          {t.label}
+                        </p>
+                        <p className="text-xs text-slate-500">{t.desc}</p>
+                      </div>
+                      {inviteType === t.value && (
+                        <Check className="w-4 h-4 text-indigo-600 ml-auto" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Role Selection */}
         <div>
           <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5">
@@ -136,7 +223,7 @@ export const InviteManager: React.FC<InviteManagerProps> = ({ type, targetId, ta
               className="w-full flex items-center justify-between px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-left focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
             >
               <div className="flex items-center gap-2">
-                {getTypeIcon()}
+                {getTypeIcon(inviteType)}
                 <div>
                   <p className="text-sm font-medium text-slate-900">{selectedRole?.label || 'Select role'}</p>
                   <p className="text-xs text-slate-500">{selectedRole?.desc}</p>
@@ -146,7 +233,7 @@ export const InviteManager: React.FC<InviteManagerProps> = ({ type, targetId, ta
             </button>
 
             {showRoleDropdown && (
-              <div className="absolute z-10 mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+              <div className="absolute z-50 bottom-full mb-2 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-y-auto">
                 {roles.map((r) => (
                   <button
                     key={r.value}
@@ -154,7 +241,7 @@ export const InviteManager: React.FC<InviteManagerProps> = ({ type, targetId, ta
                     onClick={() => { setRole(r.value); setShowRoleDropdown(false); }}
                     className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors text-left ${role === r.value ? 'bg-indigo-50' : ''}`}
                   >
-                    {getTypeIcon()}
+                    {getTypeIcon(inviteType)}
                     <div>
                       <p className={`text-sm font-medium ${role === r.value ? 'text-indigo-600' : 'text-slate-900'}`}>
                         {r.label}
@@ -175,17 +262,17 @@ export const InviteManager: React.FC<InviteManagerProps> = ({ type, targetId, ta
         <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 flex gap-2">
           <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-amber-700">
-            <p className="font-medium">Invite expires in 7 days</p>
-            <p className="mt-0.5">The invitee will receive an email with a link to accept the invitation.</p>
+            <p className="font-medium">Invite link expires in 7 days</p>
+            <p className="mt-0.5">The link will be copied to your clipboard. Share it with the invitee.</p>
           </div>
         </div>
 
         {/* Submit Button */}
         <button
           type="submit"
-          disabled={isLoading || !email.trim()}
+          disabled={isLoading || !email.trim() || !role}
           className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all ${
-            isLoading || !email.trim()
+            isLoading || !email.trim() || !role
               ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
               : 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white hover:shadow-lg hover:shadow-indigo-200'
           }`}
@@ -193,12 +280,12 @@ export const InviteManager: React.FC<InviteManagerProps> = ({ type, targetId, ta
           {isLoading ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Sending...</span>
+              <span>Creating Link...</span>
             </>
           ) : (
             <>
-              <Send className="w-4 h-4" />
-              <span>Send Invitation</span>
+              <Link className="w-4 h-4" />
+              <span>Copy Invite Link</span>
             </>
           )}
         </button>

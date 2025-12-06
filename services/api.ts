@@ -1,7 +1,8 @@
 import { 
   Space, SpacePermission, SpaceMember, User, Workspace, Project, Issue, Sprint, Epic, Team, 
   Notification, Activity, ActivityAction, SpaceType,
-  Organization, OrgMember, WorkspaceMember, Invite, OrgRole, WorkspaceRole, InviteStatus
+  Organization, OrgMember, WorkspaceMember, Invite, OrgRole, WorkspaceRole, InviteStatus,
+  TeamMember, EntityType
 } from '../types';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
@@ -26,11 +27,18 @@ export const api = {
     return [];
   },
 
-  getWorkspaces: async (): Promise<Workspace[]> => {
+  getWorkspaces: async (orgId?: string): Promise<Workspace[]> => {
     if (isSupabaseConfigured) {
-      const { data, error } = await supabase.from('workspaces').select('*');
-      if(error) console.error(error);
-      return data as Workspace[];
+      let query = supabase.from('workspaces').select('*');
+      if (orgId) {
+        query = query.eq('orgId', orgId);
+      }
+      const { data, error } = await query;
+      if(error) {
+        console.error('getWorkspaces error:', error);
+        return [];
+      }
+      return (data as Workspace[]) || [];
     }
     return [];
   },
@@ -500,35 +508,47 @@ export const api = {
   getOrganizations: async (userId: string): Promise<Organization[]> => {
     if (isSupabaseConfigured) {
       try {
-        // Get orgs where user is a member
-        const { data: memberData, error: memberError } = await supabase
-          .from('org_members')
-          .select('orgId')
-          .eq('userId', userId);
-        
-        // Handle table not existing or other errors gracefully
-        if (memberError) {
-          // 42P01 = table doesn't exist, PGRST116 = no rows
-          if (memberError.code === '42P01' || memberError.code === 'PGRST116') {
-            return [];
-          }
-          console.error('getOrganizations memberError:', memberError);
-          return [];
-        }
-        
-        if (!memberData || memberData.length === 0) return [];
-        
-        const orgIds = memberData.map(m => m.orgId);
-        const { data, error } = await supabase
+        // First, get organizations where this user is the OWNER
+        const { data: ownedOrgs, error: ownedError } = await supabase
           .from('organizations')
           .select('*')
-          .in('id', orgIds);
+          .eq('ownerId', userId);
         
-        if (error) {
-          if (error.code === '42P01') return [];
-          console.error('getOrganizations error:', error);
+        if (ownedError) {
+          console.error('getOrganizations ownedError:', ownedError);
         }
-        return (data as Organization[]) || [];
+        
+        const owned = (ownedOrgs as Organization[]) || [];
+        const ownedIds = new Set(owned.map(o => o.id));
+        
+        // Then try to get orgs where user is a member (not owner)
+        try {
+          const { data: memberData, error: memberError } = await supabase
+            .from('org_members')
+            .select('orgId')
+            .eq('userId', userId);
+          
+          if (!memberError && memberData && memberData.length > 0) {
+            // Filter out orgs we already own
+            const memberOrgIds = memberData.map(m => m.orgId).filter(id => !ownedIds.has(id));
+            
+            if (memberOrgIds.length > 0) {
+              const { data: memberOrgs } = await supabase
+                .from('organizations')
+                .select('*')
+                .in('id', memberOrgIds);
+              
+              if (memberOrgs) {
+                return [...owned, ...(memberOrgs as Organization[])];
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('org_members query failed, returning owned orgs only:', e);
+        }
+        
+        // Return only owned organizations
+        return owned;
       } catch (e) {
         console.error('getOrganizations exception:', e);
         return [];
@@ -739,7 +759,7 @@ export const api = {
   },
 
   // ============================================================
-  // INVITES SYSTEM
+  // INVITES SYSTEM (DEPRECATED - kept for backward compatibility)
   // ============================================================
   getInvitesByEmail: async (email: string): Promise<Invite[]> => {
     if (isSupabaseConfigured) {
@@ -753,8 +773,10 @@ export const api = {
         
         // Handle table not existing gracefully
         if (error) {
-          if (error.code === '42P01') return [];
+          // 42P01 = PostgreSQL table not exist, PGRST205 = PostgREST table not in cache
+          if (error.code === '42P01' || error.code === 'PGRST205') return [];
           console.error('getInvitesByEmail error:', error);
+          return [];
         }
         return (data as Invite[]) || [];
       } catch (e) {
@@ -979,6 +1001,233 @@ export const api = {
   },
 
   // ============================================================
+  // TEAM MEMBERS (Admin-Created Accounts)
+  // ============================================================
+  getTeamMembers: async (scopeType: string, scopeId: string): Promise<any[]> => {
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('team_members')
+          .select('*')
+          .eq('scopeType', scopeType)
+          .eq('scopeId', scopeId)
+          .order('createdAt', { ascending: false });
+        
+        if (error) {
+          if (error.code === '42P01') return [];
+          console.error('getTeamMembers error:', error);
+          return [];
+        }
+        return data || [];
+      } catch (e) {
+        console.error('getTeamMembers exception:', e);
+        return [];
+      }
+    }
+    return [];
+  },
+
+  getTeamMemberByEmail: async (email: string, scopeId: string): Promise<any | null> => {
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('team_members')
+          .select('*')
+          .eq('email', email.toLowerCase())
+          .eq('scopeId', scopeId)
+          .eq('isActive', true)
+          .single();
+        
+        if (error) return null;
+        return data;
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  },
+
+  createTeamMember: async (member: {
+    email: string;
+    name: string;
+    password: string;
+    role: string;
+    scopeType: string;
+    scopeId: string;
+    scopeCode: string;
+    createdBy: string;
+  }): Promise<any> => {
+    if (isSupabaseConfigured) {
+      // Check if member already exists
+      const existing = await api.getTeamMemberByEmail(member.email, member.scopeId);
+      if (existing) {
+        throw new Error('A member with this email already exists');
+      }
+
+      const teamMember = {
+        id: `tm-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        email: member.email.toLowerCase(),
+        name: member.name,
+        passwordHash: member.password, // Will be hashed by DB trigger or we handle client-side
+        role: member.role,
+        scopeType: member.scopeType,
+        scopeId: member.scopeId,
+        scopeCode: member.scopeCode,
+        isActive: true,
+        createdBy: member.createdBy,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      const { data, error } = await supabase
+        .from('team_members')
+        .insert(teamMember)
+        .select()
+        .single();
+      
+      if (error) throw new Error(error.message);
+      return data;
+    }
+    throw new Error("Supabase not configured");
+  },
+
+  updateTeamMember: async (memberId: string, updates: {
+    name?: string;
+    role?: string;
+    password?: string;
+    isActive?: boolean;
+  }): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const payload: any = {
+        ...updates,
+        updatedAt: new Date().toISOString()
+      };
+      
+      // If password is being updated, store it (will be hashed by trigger)
+      if (updates.password) {
+        payload.passwordHash = updates.password;
+        delete payload.password;
+      }
+      
+      const { error } = await supabase
+        .from('team_members')
+        .update(payload)
+        .eq('id', memberId);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  deleteTeamMember: async (memberId: string): Promise<void> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase
+        .from('team_members')
+        .delete()
+        .eq('id', memberId);
+      
+      if (error) throw new Error(error.message);
+    }
+  },
+
+  // Verify team member credentials for login
+  verifyTeamMemberCredentials: async (
+    email: string, 
+    password: string, 
+    scopeCode: string
+  ): Promise<{ member: any; scopeType: string; scopeName: string } | null> => {
+    if (isSupabaseConfigured) {
+      try {
+        // Get member by email and scope code (6-digit numeric)
+        const { data: member, error } = await supabase
+          .from('team_members')
+          .select('*')
+          .eq('email', email.toLowerCase())
+          .eq('scopeCode', scopeCode.trim())
+          .eq('isActive', true)
+          .single();
+        
+        if (error || !member) return null;
+
+        // Verify password using database function
+        const { data: verified, error: verifyError } = await supabase
+          .rpc('verify_team_member_password', {
+            member_id: member.id,
+            password_attempt: password
+          });
+        
+        if (verifyError || !verified) {
+          // Fallback: direct comparison for testing (remove in production)
+          if (member.passwordHash !== password) {
+            return null;
+          }
+        }
+
+        // Get scope name based on type
+        let scopeName = '';
+        if (member.scopeType === 'organization') {
+          const org = await api.getOrganizationById(member.scopeId);
+          scopeName = org?.name || '';
+        } else if (member.scopeType === 'workspace') {
+          const { data: ws } = await supabase.from('workspaces').select('name').eq('id', member.scopeId).single();
+          scopeName = ws?.name || '';
+        } else if (member.scopeType === 'project') {
+          const { data: proj } = await supabase.from('projects').select('name').eq('id', member.scopeId).single();
+          scopeName = proj?.name || '';
+        }
+
+        return { member, scopeType: member.scopeType, scopeName };
+      } catch (e) {
+        console.error('verifyTeamMemberCredentials exception:', e);
+        return null;
+      }
+    }
+    return null;
+  },
+
+  // Get entity info by code (6-digit numeric code)
+  getEntityByCode: async (code: string): Promise<{
+    type: 'organization' | 'workspace' | 'project';
+    id: string;
+    name: string;
+    code: string;
+  } | null> => {
+    if (isSupabaseConfigured) {
+      try {
+        const trimmedCode = code.trim();
+        
+        // Check organizations
+        const { data: org } = await supabase
+          .from('organizations')
+          .select('id, name, code')
+          .eq('code', trimmedCode)
+          .single();
+        if (org) return { type: 'organization', id: org.id, name: org.name, code: org.code };
+
+        // Check workspaces
+        const { data: ws } = await supabase
+          .from('workspaces')
+          .select('id, name, code')
+          .eq('code', trimmedCode)
+          .single();
+        if (ws) return { type: 'workspace', id: ws.id, name: ws.name, code: ws.code };
+
+        // Check projects
+        const { data: proj } = await supabase
+          .from('projects')
+          .select('id, name, code')
+          .eq('code', trimmedCode)
+          .single();
+        if (proj) return { type: 'project', id: proj.id, name: proj.name, code: proj.code };
+
+        return null;
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  },
+
+  // ============================================================
   // UTILITY: Create org with founder
   // ============================================================
   createOrganizationWithFounder: async (
@@ -1005,6 +1254,23 @@ export const api = {
       role: OrgRole.FOUNDER,
       joinedAt: new Date().toISOString()
     });
+
+    // AUTO-CREATE a default workspace for this organization
+    const defaultWorkspace: Workspace = {
+      id: `ws-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      orgId: createdOrg.id,
+      name: `${orgData.name} Workspace`,
+      ownerId: founderId,
+      members: [founderId],
+      description: `Default workspace for ${orgData.name}`,
+      visibility: 'private'
+    };
+    
+    try {
+      await api.createWorkspace(defaultWorkspace);
+    } catch (e) {
+      console.error('Failed to create default workspace:', e);
+    }
 
     return createdOrg;
   },

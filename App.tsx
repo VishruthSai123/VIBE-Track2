@@ -12,7 +12,7 @@ import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
 import { Auth } from './components/Auth';
 import { Teams } from './components/Teams';
 import { Spaces } from './components/Spaces';
-import { LayoutDashboard, Kanban, Plus, Settings as SettingsIcon, Search, Bell, HelpCircle, ListTodo, Map, Users, LogOut, ChevronDown, FolderPlus, Layers, X, CheckCircle, AlertCircle, Info, Menu, Loader2, Briefcase, Box } from 'lucide-react';
+import { LayoutDashboard, Kanban, Plus, Settings as SettingsIcon, Search, Bell, HelpCircle, ListTodo, Map, Users, LogOut, ChevronDown, FolderPlus, Layers, X, CheckCircle, AlertCircle, Info, Menu, Loader2, Briefcase, Box, Building2 } from 'lucide-react';
 import { Permission } from './types';
 
 const ToastContainer: React.FC = () => {
@@ -59,12 +59,49 @@ const SidebarItem: React.FC<{
     </div>
 );
 
+// Inline organization creation component
+const CreateOrganizationInline: React.FC<{ onCreate: (name: string) => Promise<any> }> = ({ onCreate }) => {
+    const [orgName, setOrgName] = useState('');
+    const [isCreating, setIsCreating] = useState(false);
+    
+    const handleCreate = async () => {
+        if (!orgName.trim()) return;
+        setIsCreating(true);
+        try {
+            await onCreate(orgName.trim());
+        } finally {
+            setIsCreating(false);
+        }
+    };
+    
+    return (
+        <div className="space-y-3">
+            <input
+                type="text"
+                value={orgName}
+                onChange={(e) => setOrgName(e.target.value)}
+                placeholder="Enter organization name"
+                className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+            />
+            <button
+                onClick={handleCreate}
+                disabled={!orgName.trim() || isCreating}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl font-semibold shadow-lg shadow-indigo-200 transition-all transform active:scale-[0.98] flex items-center justify-center gap-2"
+            >
+                {isCreating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Building2 className="w-5 h-5" />}
+                {isCreating ? 'Creating...' : 'Create Organization'}
+            </button>
+        </div>
+    );
+};
+
 type ViewType = 'board' | 'backlog' | 'roadmap' | 'dashboard' | 'project-settings' | 'workspace-settings' | 'profile' | 'teams' | 'spaces';
 
 const AppContent: React.FC = () => {
     const { 
         currentUser, activeProject, activeWorkspace, activeSpace, setActiveSpace, workspaces, setActiveWorkspace, 
-        projects,
+        projects, organizations, createOrganization,
         setActiveProject, 
         isAuthenticated, logout, searchQuery, setSearchQuery, notifications, 
         markNotificationRead, clearNotifications, checkPermission, isLoading
@@ -100,7 +137,32 @@ const AppContent: React.FC = () => {
         return <Auth />;
     }
 
-    // 3. Empty State (Logged in but no Workspace/Project)
+    // 3. No Organization State (new founders need to create one)
+    if (organizations.length === 0) {
+        return (
+            <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-4">
+                <ToastContainer />
+                <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-slate-100">
+                    <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <Building2 className="w-8 h-8 text-indigo-600" />
+                    </div>
+                    <h2 className="text-2xl font-bold text-slate-800 mb-3">Welcome to VibeTrack!</h2>
+                    <p className="text-slate-500 mb-8">
+                        Create your organization to get started. You'll be able to add projects and invite team members.
+                    </p>
+                    <CreateOrganizationInline onCreate={createOrganization} />
+                    <button 
+                        onClick={logout}
+                        className="w-full py-3 text-slate-500 hover:text-slate-700 font-medium transition-colors mt-4"
+                    >
+                        Sign Out
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    // 4. Empty State (Logged in but no Workspace/Project)
     if (!activeWorkspace) {
          return (
             <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-4">

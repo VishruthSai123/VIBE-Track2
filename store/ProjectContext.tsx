@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { Issue, User, Status, Priority, IssueType, Sprint, Epic, Project, Notification, Workspace, Team, Permission, UserRole, Space, SpacePermission, Activity, ActivityAction, SpaceMember, SpaceType, DEFAULT_SPACE_PERMISSIONS, Organization, OrgMember, OrgRole, WorkspaceMember, WorkspaceRole, Invite, InviteType, InviteStatus } from '../types';
+import { Issue, User, Status, Priority, IssueType, Sprint, Epic, Project, Notification, Workspace, Team, Permission, UserRole, Space, SpacePermission, Activity, ActivityAction, SpaceMember, SpaceType, DEFAULT_SPACE_PERMISSIONS, Organization, OrgMember, OrgRole, WorkspaceMember, WorkspaceRole, Invite, InviteType, InviteStatus, TeamMember, ScopeType } from '../types';
 import { api } from '../services/api';
 import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
 import { hasPermission, setPermissionOverrides, hasOrgPermission, hasWorkspacePermission, checkPermissionWithContext, PermissionContext } from '../utils/rbac';
@@ -15,6 +15,10 @@ interface ProjectContextType {
   organizations: Organization[];
   activeOrganization: Organization | null;
   currentOrgRole: OrgRole | null;
+  
+  // Team member login state
+  isTeamMember: boolean;
+  teamMemberData: TeamMember | null;
   
   workspaces: Workspace[];
   projects: Project[];
@@ -40,6 +44,7 @@ interface ProjectContextType {
   isLoading: boolean;
 
   login: (email: string, password?: string) => Promise<void>;
+  memberLogin: (email: string, password: string, entityId: string) => Promise<void>;
   signup: (name: string, email: string, workspaceName: string, role: string, password?: string, orgName?: string) => Promise<void>;
   signupWithInvite: (name: string, email: string, password: string, inviteToken: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
@@ -85,6 +90,12 @@ interface ProjectContextType {
   rejectInvite: (inviteId: string) => Promise<void>;
   loadPendingInvites: () => Promise<void>;
 
+  // Team Member management (admin-created accounts)
+  createTeamMember: (member: { email: string; name: string; password: string; role: string; scopeType: ScopeType; scopeId: string; scopeCode: string }) => Promise<TeamMember>;
+  getTeamMembers: (scopeType: ScopeType, scopeId: string) => Promise<TeamMember[]>;
+  updateTeamMember: (memberId: string, updates: { name?: string; role?: string; password?: string; isActive?: boolean }) => Promise<void>;
+  deleteTeamMember: (memberId: string) => Promise<void>;
+
   setSearchQuery: (query: string) => void;
   addIssue: (issue: Omit<Issue, 'id' | 'createdAt' | 'updatedAt' | 'comments' | 'subtasks' | 'attachments' | 'projectId'>) => void;
   updateIssue: (id: string, updates: Partial<Issue>) => void;
@@ -125,6 +136,10 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [activeOrgId, setActiveOrgId] = useState<string>('');
   const [currentOrgRole, setCurrentOrgRole] = useState<OrgRole | null>(null);
   const [pendingInvites, setPendingInvites] = useState<Invite[]>([]);
+  
+  // Team member login state
+  const [isTeamMember, setIsTeamMember] = useState(false);
+  const [teamMemberData, setTeamMemberData] = useState<TeamMember | null>(null);
   
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
@@ -208,17 +223,22 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
                     setActiveOrgId(firstOrg.id);
                     
                     // Get user's role in this org (graceful failure)
-                    try {
-                        const orgRole = await api.getOrgMemberRole(firstOrg.id, userObj.id);
-                        setCurrentOrgRole(orgRole);
-                    } catch (e) {
-                        console.error('Failed to get org role:', e);
+                    // If user is the owner, they are the admin/founder
+                    if (firstOrg.ownerId === userObj.id) {
+                        setCurrentOrgRole('Owner');
+                    } else {
+                        try {
+                            const orgRole = await api.getOrgMemberRole(firstOrg.id, userObj.id);
+                            setCurrentOrgRole(orgRole);
+                        } catch (e) {
+                            console.error('Failed to get org role:', e);
+                            setCurrentOrgRole('Member');
+                        }
                     }
                     
-                    // Load workspaces for this org only
+                    // Load workspaces for this org only (using orgId filter)
                     try {
-                        const allWs = await api.getWorkspaces();
-                        const orgWorkspaces = allWs.filter(ws => ws.orgId === firstOrg.id);
+                        const orgWorkspaces = await api.getWorkspaces(firstOrg.id);
                         setWorkspaces(orgWorkspaces);
                         
                         if (orgWorkspaces.length > 0) {
@@ -228,16 +248,10 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
                         console.error('Failed to load workspaces:', e);
                     }
                 } else {
-                    // Fallback: Load all workspaces (legacy mode or new user)
-                    try {
-                        const wsData = await api.getWorkspaces();
-                        if (wsData.length > 0) {
-                            setWorkspaces(wsData);
-                            setActiveWorkspaceId(wsData[0].id);
-                        }
-                    } catch (e) {
-                        console.error('Failed to load workspaces:', e);
-                    }
+                    // NEW USER: No organizations yet - they need to create one
+                    // Don't load any workspaces - keep empty state
+                    setWorkspaces([]);
+                    setActiveWorkspaceId('');
                 }
                 
                 // Load pending invites for this user (graceful failure)
@@ -511,7 +525,141 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setAllProjects([]);
       setActiveWorkspaceId('');
       setActiveProjectId('');
+      setIsTeamMember(false);
+      setTeamMemberData(null);
     }
+  };
+
+  // Member login (for admin-created accounts)
+  const memberLogin = async (email: string, password: string, scopeCode: string) => {
+    if (!isSupabaseConfigured) {
+      showToast("Authentication not configured", "error");
+      return;
+    }
+    setIsLoading(true);
+    try {
+      // Verify credentials against team_members table
+      const result = await api.verifyTeamMemberCredentials(email, password, scopeCode);
+      
+      if (!result) {
+        showToast("Invalid credentials or scope code", "error");
+        setIsLoading(false);
+        return;
+      }
+      
+      const { member, scopeType, scopeName } = result;
+      
+      // Create a pseudo-user object for the team member
+      const pseudoUser: User = {
+        id: member.id,
+        email: member.email,
+        name: member.name,
+        role: member.role === 'admin' ? 'Admin' : member.role === 'viewer' ? 'Viewer' : 'Developer',
+        avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(member.name)}&background=random`,
+        workspaceIds: []
+      };
+      
+      setCurrentUser(pseudoUser);
+      setIsTeamMember(true);
+      setTeamMemberData(member);
+      
+      // Load entity data based on type
+      if (scopeType === 'organization') {
+        const org = await api.getOrganizationById(member.scopeId);
+        if (org) {
+          setOrganizations([org]);
+          setActiveOrgId(org.id);
+          
+          // Load workspaces for this org (filtered by orgId)
+          const orgWorkspaces = await api.getWorkspaces(org.id);
+          setWorkspaces(orgWorkspaces);
+          if (orgWorkspaces.length > 0) {
+            setActiveWorkspaceId(orgWorkspaces[0].id);
+          }
+        }
+      } else if (scopeType === 'workspace') {
+        // Load just this workspace by getting workspaces and filtering
+        // We need the orgId to filter, so get the workspace directly
+        const { data: ws } = await supabase.from('workspaces').select('*').eq('id', member.scopeId).single();
+        if (ws) {
+          setWorkspaces([ws as Workspace]);
+          setActiveWorkspaceId(ws.id);
+          // If workspace has an org, load it
+          if (ws.orgId) {
+            const org = await api.getOrganizationById(ws.orgId);
+            if (org) {
+              setOrganizations([org]);
+              setActiveOrgId(org.id);
+            }
+          }
+        }
+      } else if (scopeType === 'project') {
+        // Load the project and its parent workspace
+        const allProjs = await api.getProjects('');
+        const proj = allProjs.find(p => p.id === member.scopeId);
+        if (proj) {
+          setAllProjects([proj]);
+          setActiveProjectId(proj.id);
+          // Load workspace directly by ID
+          const { data: ws } = await supabase.from('workspaces').select('*').eq('id', proj.workspaceId).single();
+          if (ws) {
+            setWorkspaces([ws as Workspace]);
+            setActiveWorkspaceId(ws.id);
+          }
+        }
+      }
+      
+      // Load users for display
+      const allUsers = await api.getUsers();
+      setUsers(allUsers);
+      
+      showToast(`Welcome back, ${member.name}!`, "success");
+    } catch (error: any) {
+      console.error('Member login error:', error);
+      showToast(error.message || "Login failed", "error");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Team Member CRUD operations
+  const createTeamMember = async (member: { 
+    email: string; 
+    name: string; 
+    password: string; 
+    role: string; 
+    scopeType: ScopeType; 
+    scopeId: string;
+    scopeCode: string;
+  }): Promise<TeamMember> => {
+    if (!currentUser) throw new Error("Not authenticated");
+    
+    const created = await api.createTeamMember({
+      ...member,
+      createdBy: currentUser.id
+    });
+    
+    showToast(`Team member "${member.name}" created successfully`, "success");
+    return created as TeamMember;
+  };
+
+  const getTeamMembers = async (scopeType: ScopeType, scopeId: string): Promise<TeamMember[]> => {
+    return await api.getTeamMembers(scopeType, scopeId) as TeamMember[];
+  };
+
+  const updateTeamMember = async (memberId: string, updates: { 
+    name?: string; 
+    role?: string; 
+    password?: string; 
+    isActive?: boolean 
+  }): Promise<void> => {
+    await api.updateTeamMember(memberId, updates);
+    showToast("Team member updated successfully", "success");
+  };
+
+  const deleteTeamMember = async (memberId: string): Promise<void> => {
+    await api.deleteTeamMember(memberId);
+    showToast("Team member deleted successfully", "success");
   };
 
   const createWorkspace = async (name: string): Promise<boolean> => {
@@ -938,13 +1086,18 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const setActiveOrganization = async (orgId: string) => {
     setActiveOrgId(orgId);
     // Load organization role for current user
+    // Check if user is owner first
+    const org = organizations.find(o => o.id === orgId);
     if (currentUser) {
-      const role = await api.getOrgMemberRole(orgId, currentUser.id);
-      setCurrentOrgRole(role);
+      if (org && org.ownerId === currentUser.id) {
+        setCurrentOrgRole('Owner');
+      } else {
+        const role = await api.getOrgMemberRole(orgId, currentUser.id);
+        setCurrentOrgRole(role);
+      }
     }
-    // Filter workspaces by organization
-    const allWs = await api.getWorkspaces();
-    const orgWorkspaces = allWs.filter(ws => ws.orgId === orgId);
+    // Load workspaces filtered by organization
+    const orgWorkspaces = await api.getWorkspaces(orgId);
     setWorkspaces(orgWorkspaces);
     if (orgWorkspaces.length > 0) {
       setActiveWorkspaceId(orgWorkspaces[0].id);
@@ -962,6 +1115,16 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         currentUser.id
       );
       setOrganizations(prev => [...prev, org]);
+      setActiveOrgId(org.id);
+      setCurrentOrgRole('Owner');
+      
+      // Load the auto-created workspace for this org
+      const orgWorkspaces = await api.getWorkspaces(org.id);
+      if (orgWorkspaces.length > 0) {
+        setWorkspaces(orgWorkspaces);
+        setActiveWorkspaceId(orgWorkspaces[0].id);
+      }
+      
       showToast(`Organization "${name}" created`, "success");
       return org;
     } catch (e: any) {
@@ -1016,12 +1179,45 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // Generate invite URL for sharing
       const inviteUrl = `${window.location.origin}?invite=${token}&email=${encodeURIComponent(email)}`;
       
-      // Copy to clipboard
-      try {
-        await navigator.clipboard.writeText(inviteUrl);
-        showToast(`Invitation created! Link copied to clipboard.`, "success");
-      } catch {
-        showToast(`Invitation sent to ${email}`, "success");
+      // Copy to clipboard with multiple fallback methods
+      const copyToClipboard = async (text: string): Promise<boolean> => {
+        // Method 1: Modern Clipboard API
+        if (navigator.clipboard && window.isSecureContext) {
+          try {
+            await navigator.clipboard.writeText(text);
+            return true;
+          } catch (e) {
+            console.warn('Clipboard API failed:', e);
+          }
+        }
+        
+        // Method 2: execCommand fallback
+        try {
+          const textArea = document.createElement('textarea');
+          textArea.value = text;
+          textArea.style.position = 'fixed';
+          textArea.style.left = '-9999px';
+          textArea.style.top = '-9999px';
+          document.body.appendChild(textArea);
+          textArea.focus();
+          textArea.select();
+          const success = document.execCommand('copy');
+          document.body.removeChild(textArea);
+          if (success) return true;
+        } catch (e) {
+          console.warn('execCommand fallback failed:', e);
+        }
+        
+        return false;
+      };
+      
+      const copied = await copyToClipboard(inviteUrl);
+      if (copied) {
+        showToast(`✅ Invite link copied! Share it with ${email}`, "success");
+      } else {
+        // Show the link in a prompt so user can manually copy
+        window.prompt('Copy this invite link:', inviteUrl);
+        showToast(`Invite created for ${email}`, "info");
       }
       
       console.log('Invite URL:', inviteUrl); // For debugging
@@ -1053,9 +1249,9 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // Reload pending invites and organizations
       await loadPendingInvites();
       const orgs = await api.getOrganizations(currentUser.id);
-      setOrganizations(orgs);
+      setOrganizations(orgs || []);
     } catch (e: any) {
-      showToast(e.message, "error");
+      showToast(e.message || "Failed to accept invite", "error");
     }
   };
 
@@ -1076,13 +1272,19 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setActiveOrganization, createOrganization: createOrganizationAction, updateOrganization: updateOrganizationAction,
       checkOrgPermission,
       
+      // Team member state
+      isTeamMember, teamMemberData,
+      
       // Invites
       createInvite: createInviteAction, acceptInvite: acceptInviteAction, rejectInvite: rejectInviteAction, loadPendingInvites,
+      
+      // Team Member CRUD
+      createTeamMember, getTeamMembers, updateTeamMember, deleteTeamMember,
       
       // Existing
       workspaces, projects, spaces, teams, issues: filteredIssues, allIssues: rawIssues, users, sprints, epics, notifications, activities,
       activeWorkspace, activeProject, activeSpace, activeSprint, currentUser, searchQuery, isAuthenticated, isLoading,
-      login, signup, signupWithInvite, logout, resetPassword, setActiveWorkspace: setActiveWorkspaceId, setActiveProject: setActiveProjectId, setActiveSpace: setActiveSpaceId,
+      login, memberLogin, signup, signupWithInvite, logout, resetPassword, setActiveWorkspace: setActiveWorkspaceId, setActiveProject: setActiveProjectId, setActiveSpace: setActiveSpaceId,
       createWorkspace, updateWorkspaceDetails, deleteCurrentWorkspace, createProject, 
       createSpace, updateSpace, softDeleteSpace, restoreSpace, deleteSpace,
       getSpaceMembers, addSpaceMember, removeSpaceMember,

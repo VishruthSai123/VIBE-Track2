@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useProject } from '../store/ProjectContext';
-import { Save, Settings as SettingsIcon, Shield, Trash2, Mail, X, Briefcase, Eye, EyeOff, Palette, Image as ImageIcon } from 'lucide-react';
+import { Save, Settings as SettingsIcon, Shield, Trash2, Mail, X, Briefcase, Eye, EyeOff, Palette, Image as ImageIcon, UserPlus, Users, Copy, Check } from 'lucide-react';
 import { Permission } from '../types';
+import TeamMemberManager from './TeamMemberManager';
+import { PendingInvites } from './InviteManager';
 
 interface SettingsProps {
     view: 'project' | 'workspace';
@@ -141,7 +143,7 @@ export const Settings: React.FC<SettingsProps> = ({ view }) => {
             </p>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden p-6 md:p-8">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8">
             {view === 'project' && activeProject && (
                 <form onSubmit={handleSaveProject} className="space-y-6 animate-fade-in-up">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -314,6 +316,29 @@ export const Settings: React.FC<SettingsProps> = ({ view }) => {
                             </button>
                         </div>
                     </form>
+
+                    {/* Team & Invites Section */}
+                    <div className="border-t border-slate-200 pt-8 mt-8">
+                        <div className="flex items-center gap-2 mb-6">
+                            <Users className="w-5 h-5 text-indigo-500" />
+                            <h3 className="text-lg font-bold text-slate-800">Team Members</h3>
+                        </div>
+                        
+                        {/* Team Member Manager (for creating team member accounts) */}
+                        {canManageAccess && activeWorkspace && (
+                            <TeamMemberManager 
+                                scopeType="workspace"
+                                scopeId={activeWorkspace.id}
+                                scopeCode={(activeWorkspace as any).code || activeWorkspace.id}
+                                scopeName={activeWorkspace.name}
+                            />
+                        )}
+                        
+                        {/* Legacy: Pending Invites for Current User */}
+                        <div className="mt-6">
+                            <PendingInvites />
+                        </div>
+                    </div>
 
                     {isWorkspaceOwner && (
                         <div className="border border-red-200 bg-red-50 rounded-xl p-6 mt-8">
